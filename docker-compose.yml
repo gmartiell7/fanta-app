@@ -1,0 +1,16 @@
+services:
+  db:
+    image: postgres:16
+    container_name: fanta-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: fanta
+    ports:
+      - "5432:5432"
+    volumes:
+      - fanta_pgdata:/var/lib/postgresql/data
+
+volumes:
+  fanta_pgdata:

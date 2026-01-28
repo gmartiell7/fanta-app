@@ -1,0 +1,148 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id       String  @id @default(cuid())
+  email    String  @unique
+  password String
+  name     String?
+  role     Role    @default(USER)
+
+  team Team?
+
+  prediction UserPrediction?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Player {
+  id    String @id @default(cuid())
+  extId Int    @unique
+  name  String
+
+  // ✅ Primario (Mantra): string (es. "Por", "Dd", "Ds", "W", "A", "Pc", ...)
+  roleMantra String
+
+  // ✅ Secondario (Classic): string (es. "P","D","C","A")
+  roleClassic String?
+
+  team  String
+  price Int    @default(0)
+
+  teams TeamPlayer[]
+  stats MatchdayStat[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([roleMantra])
+  @@index([roleClassic])
+  @@index([team])
+  @@index([name])
+}
+
+model Team {
+  id   String @id @default(cuid())
+  name String
+
+  ownerId String @unique
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  players TeamPlayer[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model TeamPlayer {
+  id          String @id @default(cuid())
+  teamId      String
+  playerExtId Int
+
+  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player Player @relation(fields: [playerExtId], references: [extId], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+
+  @@unique([teamId, playerExtId])
+  @@index([playerExtId])
+  @@index([teamId])
+}
+
+model MatchdayStat {
+  id       String @id @default(cuid())
+  matchday Int
+  playerId String
+
+  voteRaw String?
+  vote    Float?
+
+  gf  Int @default(0)
+  gs  Int @default(0)
+  rp  Int @default(0)
+  rs  Int @default(0)
+  rf  Int @default(0)
+  au  Int @default(0)
+  amm Int @default(0)
+  esp Int @default(0)
+  ass Int @default(0)
+
+  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([playerId, matchday])
+  @@index([matchday])
+  @@index([playerId])
+}
+
+model UserPrediction {
+  id        String   @id @default(cuid())
+  userId    String   @unique
+  text      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model SerieACalendarMatch {
+  id       String    @id @default(cuid())
+  season   String
+  matchday Int
+  date     DateTime?
+  location String?
+  homeTeam String
+  awayTeam String
+  result   String?
+
+  createdAt DateTime @default(now())
+
+  @@unique([season, matchday, homeTeam, awayTeam])
+  @@index([season, matchday])
+}
+
+model FreeAgentNote {
+  id        String   @id @default(cuid())
+  userId    String
+  playerKey Int      // extId = valore della colonna "#"
+  note      String   @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, playerKey])
+  @@index([userId])
+}
