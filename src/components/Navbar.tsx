@@ -3,16 +3,28 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import clsx from "clsx";
+import { useSession } from "next-auth/react";
 
-const links = [
+const BASE_LINKS = [
     { href: "/", label: "Home" },
     { href: "/team", label: "Team" },
     { href: "/svincolati", label: "Svincolati" },
-    { href: "/admin/listone", label: "Admin" },
 ];
+
+const ADMIN_LINK = { href: "/admin/listone", label: "Admin" };
 
 export default function Navbar() {
     const pathname = usePathname();
+    const { data: session, status } = useSession();
+
+    const isAdmin = (session?.user as any)?.isAdmin === true;
+
+    const links =
+        status === "authenticated"
+            ? isAdmin
+                ? [...BASE_LINKS, ADMIN_LINK]
+                : BASE_LINKS
+            : [{ href: "/", label: "Home" }];
 
     return (
         <nav className="w-full bg-slate-900 text-white px-6 py-3 flex items-center gap-6">

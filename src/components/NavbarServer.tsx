@@ -4,7 +4,6 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import NavLink from "@/components/NavLink";
 import LogoutButton from "@/components/LogoutButton";
 import MobileMenu from "@/components/MobileMenu";
-import { isAdminEmail } from "@/lib/admin";
 
 const MAIN_LINKS = [
     { href: "/team", label: "Team" },
@@ -24,7 +23,7 @@ export default async function NavbarServer() {
     if (!session?.user) return null;
 
     const email = session.user.email ?? "";
-    const isAdmin = isAdminEmail(email);
+    const isAdmin = (session.user as any)?.isAdmin === true;
 
     return (
         <header className="sticky top-0 z-50">
@@ -95,11 +94,7 @@ export default async function NavbarServer() {
                             <LogoutButton />
 
                             {/* MOBILE MENU */}
-                            <MobileMenu
-                                mainLinks={MAIN_LINKS}
-                                adminLinks={ADMIN_LINKS}
-                                isAdmin={isAdmin}
-                            />
+                            <MobileMenu mainLinks={MAIN_LINKS} adminLinks={ADMIN_LINKS} isAdmin={isAdmin} />
                         </div>
                     </div>
                 </div>
