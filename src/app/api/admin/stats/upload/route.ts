@@ -19,10 +19,8 @@ function parseVoteRaw(v: any): { voteRaw: string | null; vote: number | null } {
 }
 
 function splitLine(line: string): string[] {
-    // ⚠️ NON rimuovere i campi vuoti: servono per mantenere gli indici corretti
     const parts = line.split(/\t|;/g).map((x) => x.trim());
     if (parts.length <= 1) {
-        // fallback: spazi multipli
         return line.split(/\s{2,}/g).map((x) => x.trim());
     }
     return parts;
@@ -33,7 +31,6 @@ function looksLikeHeader(line: string) {
 }
 
 function looksLikeData(tokens: string[]) {
-    // ci aspettiamo almeno: Cod Ruolo Nome Voto ... -> quindi >= 4
     return tokens.length >= 4 && /^\d+$/.test(tokens[0] ?? "");
 }
 
@@ -52,14 +49,9 @@ export async function POST(req: Request) {
         return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
     }
 
-    let formData: FormData;
-    try {
-        formData = await req.formData();
-    } catch {
-        return NextResponse.json({ error: "FormData non valido" }, { status: 400 });
-    }
-
+    const formData = await req.formData();
     const file = formData.get("file");
+
     if (!(file instanceof File)) {
         return NextResponse.json({ error: "File mancante o non valido" }, { status: 400 });
     }
@@ -85,9 +77,21 @@ export async function POST(req: Request) {
         );
     }
 
+    // 🔒 CONTROLLO: giornata già caricata
+    const alreadyExists = await prisma.matchdayStat.findFirst({
+        where: { matchday },
+        select: { id: true },
+    });
+
+    if (alreadyExists) {
+        return NextResponse.json(
+            { error: `La giornata ${matchday} risulta già caricata.` },
+            { status: 409 }
+        );
+    }
+
     const lines = text.split(/\r?\n/).map((l) => l.trimEnd());
 
-    // Mappa extId -> playerId
     const players = await prisma.player.findMany({
         select: { id: true, extId: true },
     });
@@ -96,7 +100,6 @@ export async function POST(req: Request) {
     for (const p of players) byExtId.set(p.extId, p.id);
 
     let headerFound = false;
-
     let parsed = 0;
     let notFoundPlayers = 0;
 
@@ -112,8 +115,6 @@ export async function POST(req: Request) {
         }
 
         const tokens = splitLine(line);
-
-        // Se non è una riga dati (es. nome squadra / footer), skip
         if (!looksLikeData(tokens)) continue;
 
         parsed++;
@@ -153,7 +154,7 @@ export async function POST(req: Request) {
 
     const result = await prisma.matchdayStat.createMany({
         data: toCreate,
-        skipDuplicates: true, // @@unique([playerId, matchday])
+        skipDuplicates: true,
     });
 
     return NextResponse.json({

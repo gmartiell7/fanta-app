@@ -10,7 +10,7 @@ export default function Home() {
     const router = useRouter();
 
     // LOGIN
-    const [loginEmail, setLoginEmail] = useState("test2@fanta.it");
+    const [loginEmail, setLoginEmail] = useState("esempio@fanta.it");
     const [loginPassword, setLoginPassword] = useState("password123");
 
     // REGISTER
@@ -19,15 +19,16 @@ export default function Home() {
     const [regPassword2, setRegPassword2] = useState("");
     const [isRegistering, setIsRegistering] = useState(false);
 
-    // Redirect dopo login
+    // Redirect dopo login (con refresh per aggiornare Server Components come NavbarServer)
     useEffect(() => {
-        if (session) {
-            const timer = setTimeout(() => {
-                router.push("/me");
-            }, 1000);
+        if (!session) return;
 
-            return () => clearTimeout(timer);
-        }
+        const timer = setTimeout(() => {
+            router.refresh(); // ✅ forza aggiornamento sessione lato server
+            router.replace("/me"); // o "/team" se preferisci
+        }, 300);
+
+        return () => clearTimeout(timer);
     }, [session, router]);
 
     if (status === "loading") {
@@ -69,11 +70,9 @@ export default function Home() {
 
             toast.success("Registrazione completata! Ora fai login.");
 
-            // Precompilo il login con i dati appena registrati
             setLoginEmail(regEmail);
             setLoginPassword(regPassword);
 
-            // Reset registrazione
             setRegEmail("");
             setRegPassword("");
             setRegPassword2("");
@@ -91,8 +90,15 @@ export default function Home() {
             redirect: false,
         });
 
-        if (res?.ok) toast.success("Login OK");
-        else toast.error(`Login KO: ${res?.error ?? "errore"}`);
+        if (res?.ok) {
+            toast.success("Login OK");
+            // ✅ subito refresh + navigazione (evita navbar che compare solo con F5)
+            router.refresh();
+            router.replace("/me"); // o "/team"
+            return;
+        }
+
+        toast.error(`Login KO: ${res?.error ?? "errore"}`);
     }
 
     const cardClass = `
@@ -191,10 +197,7 @@ export default function Home() {
                                     />
                                 </div>
 
-                                <button
-                                    className="bg-black text-white rounded px-4 py-2 w-full"
-                                    onClick={handleLogin}
-                                >
+                                <button className="bg-black text-white rounded px-4 py-2 w-full" onClick={handleLogin}>
                                     Login
                                 </button>
                             </div>
@@ -206,7 +209,7 @@ export default function Home() {
                             Login effettuato come <span className="font-semibold">{session.user?.email}</span>
                         </p>
                         <p className="text-gray-500 text-sm">
-                            Reindirizzamento in corso a <span className="font-mono">/team</span>…
+                            Reindirizzamento in corso a <span className="font-mono">/me</span>…
                         </p>
 
                         <button
