@@ -1,10 +1,10 @@
-export const ADMIN_EMAILS = [
-    "admin@fanta.it",
-    "raffy@email.it",
-    "test2@fanta.it",
-].map((e) => e.toLowerCase());
-
-export function isAdminEmail(email?: string | null) {
+export function isAdminEmail(email: string | null | undefined) {
     if (!email) return false;
-    return ADMIN_EMAILS.includes(email.toLowerCase());
+
+    const admins = (process.env.ADMIN_EMAILS ?? "")
+        .split(",")
+        .map((s) => s.trim().toLowerCase())
+        .filter(Boolean);
+
+    return admins.includes(email.toLowerCase());
 }
