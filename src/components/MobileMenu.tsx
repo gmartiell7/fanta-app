@@ -82,28 +82,28 @@ export default function MobileMenu({
                     open ? "opacity-100 pointer-events-auto" : "opacity-0 pointer-events-none"
                 )}
             >
-                {/* overlay */}
+                {/* overlay (più leggibile su mobile) */}
                 <button
                     aria-label="Chiudi menu"
                     onClick={() => setOpen(false)}
                     className={clsx(
-                        "absolute inset-0 bg-black/50",
-                        "transition-opacity duration-200"
+                        "absolute inset-0",
+                        "bg-slate-950/80 backdrop-blur-sm"
                     )}
                 />
 
                 {/* panel */}
                 <div
                     className={clsx(
-                        "absolute right-0 top-0 h-full w-[86%] max-w-[360px]",
-                        "bg-slate-950 border-l border-white/10",
+                        "absolute right-0 top-0 min-h-screen h-full w-[86%] max-w-[360px]",
+                        "bg-slate-950 text-white border-l border-white/10 shadow-2xl",
                         "p-4",
-                        "transition-transform duration-200",
+                        "transition-transform duration-200 will-change-transform",
                         open ? "translate-x-0" : "translate-x-full"
                     )}
                 >
                     <div className="flex items-center justify-between">
-                        <span className="text-white font-semibold">Menu</span>
+                        <span className="font-semibold">Menu</span>
                         <button
                             onClick={() => setOpen(false)}
                             className="rounded-xl px-3 py-2 text-white/80 hover:text-white hover:bg-white/10 transition"
