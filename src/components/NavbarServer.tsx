@@ -16,6 +16,10 @@ const ADMIN_LINKS = [
     { href: "/admin/voti", label: "Inserimento voti" },
 ];
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
+
 export default async function NavbarServer() {
     const session = await getServerSession(authOptions);
 

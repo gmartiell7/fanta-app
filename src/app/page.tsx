@@ -92,11 +92,11 @@ export default function Home() {
 
         if (res?.ok) {
             toast.success("Login OK");
-            // ✅ subito refresh + navigazione (evita navbar che compare solo con F5)
-            router.refresh();
-            router.replace("/me"); // o "/team"
+            router.replace("/me");
+            setTimeout(() => router.refresh(), 0); // ✅ refresh dopo la navigazione
             return;
         }
+
 
         toast.error(`Login KO: ${res?.error ?? "errore"}`);
     }
