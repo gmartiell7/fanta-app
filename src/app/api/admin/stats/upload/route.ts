@@ -3,6 +3,8 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
+export const runtime = "nodejs"; // usa Buffer tranquillo
+
 function toInt(v: any) {
     const n = Number(String(v ?? "").replace(",", "."));
     return Number.isFinite(n) ? Math.trunc(n) : 0;
@@ -44,26 +46,41 @@ function parseMatchdayFromText(text: string): number | null {
 
 export async function POST(req: Request) {
     const session = await getServerSession(authOptions);
-    if (!session || (session.user as any).role !== "ADMIN") {
-        return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
+    const isAdmin = (session?.user as any)?.isAdmin === true;
+
+    if (!session?.user || !isAdmin) {
+        return NextResponse.json({ error: "Non autorizzato" }, { status: 403 });
     }
 
-    const formData = await req.formData();
-    const file = formData.get("file") as File;
+    let formData: FormData;
+    try {
+        formData = await req.formData();
+    } catch {
+        return NextResponse.json({ error: "FormData non valido" }, { status: 400 });
+    }
 
-    const matchdayFromForm = Number(formData.get("matchday") ?? "");
-    if (!file) return NextResponse.json({ error: "File mancante" }, { status: 400 });
+    const file = formData.get("file");
+    if (!(file instanceof File)) {
+        return NextResponse.json({ error: "File mancante o non valido" }, { status: 400 });
+    }
+
+    const matchdayFromForm = Number(String(formData.get("matchday") ?? "").trim());
 
     const buffer = Buffer.from(await file.arrayBuffer());
     const text = buffer.toString("utf-8");
 
     const matchdayFromTitle = parseMatchdayFromText(text);
     const matchday =
-        Number.isFinite(matchdayFromForm) && matchdayFromForm > 0 ? matchdayFromForm : matchdayFromTitle;
+        Number.isFinite(matchdayFromForm) && matchdayFromForm > 0
+            ? matchdayFromForm
+            : matchdayFromTitle;
 
     if (!matchday) {
         return NextResponse.json(
-            { error: "Giornata mancante. Inserisci matchday oppure usa un file che contenga '21ª giornata' nel testo." },
+            {
+                error:
+                    "Giornata mancante. Inserisci matchday oppure usa un file che contenga '21ª giornata' nel testo.",
+            },
             { status: 400 }
         );
     }
@@ -128,7 +145,10 @@ export async function POST(req: Request) {
     }
 
     if (!headerFound) {
-        return NextResponse.json({ error: "Header non trovato: mi aspettavo una riga che inizia con 'Cod.'." }, { status: 400 });
+        return NextResponse.json(
+            { error: "Header non trovato: mi aspettavo una riga che inizia con 'Cod.'." },
+            { status: 400 }
+        );
     }
 
     const result = await prisma.matchdayStat.createMany({
