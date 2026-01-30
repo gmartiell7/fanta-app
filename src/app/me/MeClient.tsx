@@ -9,6 +9,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
 
+
+type GameMode = "MANTRA" | "CLASSIC";
 type StatRow = {
     matchday: number;
     vote: number | null;
@@ -28,10 +30,11 @@ type PlayerFromDB = {
     name: string;
     team: string;
     roleMantra: string | null;
+    roleClassic?: string | null;
     stats?: StatRow[];
 };
 
-function splitRoles(roleMantra?: string | null) {
+function splitRoles(role?: string | null) {
     return String(roleMantra ?? "")
         .split(/[\/;]+/)
         .map((s) => s.trim())
@@ -43,6 +46,11 @@ function normRole(r: string) {
     const lower = x.toLowerCase();
     return lower.charAt(0).toUpperCase() + lower.slice(1);
 }
+
+function roleStringForMode(p: PlayerFromDB, mode: GameMode) {
+    return mode === "CLASSIC" ? String(p.roleClassic ?? "") : String(p.roleMantra ?? "");
+}
+
 
 function calcMvFromStats(stats: Pick<StatRow, "vote">[]): number | null {
     const votes = stats.map((s) => s.vote).filter((v): v is number => v !== null);
@@ -152,9 +160,9 @@ function hasBonusLast5(row: Row, totalMatchdays: number) {
     return true;
 }
 
-function computeTopFlopScoresByRole(players: PlayerFromDB[]) {
+function computeTopFlopScoresByRole(players: PlayerFromDB[], mode: GameMode) {
     const items = players.map((p) => {
-        const roles = splitRoles(p.roleMantra).map(normRole);
+        const roles = splitRoles(roleStringForMode(p, mode)).map(normRole);
 
         const stats: StatRow[] = (p.stats ?? []).map((s) => ({
             matchday: Number(s.matchday ?? 0),
@@ -252,6 +260,17 @@ const MODULES: ModuleDef[] = [
     { name: "4-4-2", slots: ["Por", "Dd", "Dc", "Dc", "Ds", "E/W", "M/C", "C", "E", "A/Pc", "A/Pc"] },
 ];
 
+const CLASSIC_MODULE_DEFS: ModuleDef[] = [
+    { name: "3-4-3", slots: ["P", "D", "D", "D", "C", "C", "C", "C", "A", "A", "A"] },
+    { name: "3-5-2", slots: ["P", "D", "D", "D", "C", "C", "C", "C", "C", "A", "A"] },
+    { name: "4-3-3", slots: ["P", "D", "D", "D", "D", "C", "C", "C", "A", "A", "A"] },
+    { name: "4-4-2", slots: ["P", "D", "D", "D", "D", "C", "C", "C", "C", "A", "A"] },
+    { name: "4-5-1", slots: ["P", "D", "D", "D", "D", "C", "C", "C", "C", "C", "A"] },
+    { name: "5-3-2", slots: ["P", "D", "D", "D", "D", "D", "C", "C", "C", "A", "A"] },
+    { name: "5-4-1", slots: ["P", "D", "D", "D", "D", "D", "C", "C", "C", "C", "A"] },
+];
+
+
 function expandRoleToken(token: string): string[] {
     const t = token.trim();
     const parts = t.split("/").map((x) => x.trim()).filter(Boolean);
@@ -279,11 +298,12 @@ type PickBestLineupResult =
 function pickBestLineup(
     players: PlayerFromDB[],
     scoreByRole: Map<string, Map<string, number>>,
-    module: ModuleDef
+    module: ModuleDef,
+    mode: GameMode
 ): PickBestLineupResult {
 
     const playerRoles = new Map<string, string[]>();
-    for (const p of players) playerRoles.set(p.id, splitRoles(p.roleMantra).map(normRole));
+    for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
 
     for (const slot of module.slots) {
         const allowed = expandRoleToken(slot);
@@ -331,9 +351,17 @@ function pickBestLineup(
     return { selectable: true as const, lineup };
 }
 
-function getLineGroup(slot: string) {
+function getLineGroup(slot: string, mode: GameMode) {
     const roles = expandRoleToken(slot);
     const has = (r: string) => roles.includes(r);
+
+    if (mode === "CLASSIC") {
+        if (has("P")) return "GK";
+        if (has("D")) return "DEF";
+        if (has("C")) return "MID";
+        if (has("A")) return "ATT";
+        return "MID";
+    }
 
     if (has("Por")) return "GK";
     if (has("Dd") || has("Ds") || has("Dc")) return "DEF";
@@ -389,12 +417,12 @@ function errMsg(e: unknown) {
     return e instanceof Error ? e.message : "Errore";
 }
 
-function Pitch({ lineup }: { lineup: LineupItem[] }) {
+function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: GameMode }) {
 
     const grouped = useMemo(() => {
         const g: Record<string, typeof lineup> = { ATT: [], AM: [], MID: [], WING: [], DEF: [], GK: [] };
         for (const x of lineup) {
-            const k = getLineGroup(x.slot);
+            const k = getLineGroup(x.slot, mode);
             (g[k] ?? (g[k] = [])).push(x);
         }
         return [
@@ -530,15 +558,65 @@ export default function MeClient({
     players,
     initialPrediction,
     listoneTeams,
+    initialGameMode,
 }: {
     email: string;
     teamName: string;
     players: PlayerFromDB[];
     initialPrediction: string;
     listoneTeams: string[];
+    initialGameMode?: GameMode;
 }) {
     const [name, setName] = useState(teamName);
     const [saving, setSaving] = useState(false);
+
+    const [mode, setMode] = useState<GameMode>(() => initialGameMode ?? "MANTRA");
+    const [savingMode, setSavingMode] = useState(false);
+
+    // (opzionale) riallinea il mode dal server se l'utente cambia device/sessione
+    useEffect(() => {
+        let alive = true;
+        (async () => {
+            try {
+                const r = await fetch("/api/me/game-mode", { cache: "no-store" });
+                if (!r.ok) return;
+                const d = await r.json();
+                const gm = String(d?.gameMode ?? "MANTRA").toUpperCase();
+                if (!alive) return;
+                if (gm === "MANTRA" || gm === "CLASSIC") setMode(gm as GameMode);
+            } catch {
+                // ignore
+            }
+        })();
+        return () => {
+            alive = false;
+        };
+    }, []);
+
+    async function saveGameMode(next: GameMode) {
+        if (next === mode) return;
+        setSavingMode(true);
+        try {
+            const r = await fetch("/api/me/game-mode", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ gameMode: next }),
+            });
+            const d = await r.json().catch(() => ({}));
+            if (!r.ok) throw new Error(d?.error ?? "Salvataggio fallito");
+
+            const gm = String(d?.gameMode ?? next).toUpperCase();
+            if (gm === "MANTRA" || gm === "CLASSIC") setMode(gm as GameMode);
+            else setMode(next);
+
+            toast.success("Modalità salvata");
+        } catch (e: unknown) {
+            toast.error(errMsg(e));
+        } finally {
+            setSavingMode(false);
+        }
+    }
+
 
     const [cats, setCats] = useState<CatState>(() => parsePredictionToCats(initialPrediction));
     const [predictionText, setPredictionText] = useState<string>(() =>
@@ -597,14 +675,29 @@ export default function MeClient({
         setPredictionText(buildPredictionTextFromCats(cats));
     }, [cats]);
 
-    const [moduleName, setModuleName] = useState(MODULES[0]?.name ?? "3-4-1-2");
-    const { scoreByRole } = useMemo(() => computeTopFlopScoresByRole(players), [players]);
-const moduleDef = useMemo(() => MODULES.find((m) => m.name === moduleName) ?? MODULES[0], [moduleName]);
+    const moduleDefs = useMemo(() => (mode === "CLASSIC" ? CLASSIC_MODULE_DEFS : MODULES), [mode]);
+
+    const [moduleName, setModuleName] = useState<string>(
+        moduleDefs[0]?.name ?? (mode === "CLASSIC" ? "4-4-2" : "3-4-1-2")
+    );
+
+    useEffect(() => {
+        if (!moduleDefs.some((m) => m.name === moduleName)) {
+            setModuleName(moduleDefs[0]?.name ?? moduleName);
+        }
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode]);
+
+    const { scoreByRole } = useMemo(() => computeTopFlopScoresByRole(players, mode), [players, mode]);
+    const moduleDef = useMemo(
+        () => moduleDefs.find((m) => m.name === moduleName) ?? moduleDefs[0],
+        [moduleDefs, moduleName]
+    );
 
     const ideal = useMemo(() => {
         if (!moduleDef) return { selectable: false, lineup: [] };
-        return pickBestLineup(players, scoreByRole, moduleDef);
-    }, [players, scoreByRole, moduleDef]);
+        return pickBestLineup(players, scoreByRole, moduleDef, mode);
+    }, [players, scoreByRole, moduleDef, mode]);
 
     async function saveTeamName() {
         const trimmed = name.trim();
@@ -682,6 +775,44 @@ const moduleDef = useMemo(() => MODULES.find((m) => m.name === moduleName) ?? MO
                     Vai al Team →
                 </Link>
             </div>
+
+
+            <Card className="rounded-2xl shadow-sm border-slate-200">
+                <CardHeader>
+                    <CardTitle>Modalità di gioco</CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-3">
+                    <div className="text-sm text-muted-foreground">
+                        Seleziona <b>Mantra</b> o <b>Classic</b>. La scelta viene salvata sul tuo profilo e usata per ruoli/moduli.
+                    </div>
+                    <Separator />
+                    <div className="flex flex-wrap gap-2">
+                        <Button
+                            type="button"
+                            variant={mode === "MANTRA" ? "default" : "outline"}
+                            className="rounded-xl"
+                            disabled={savingMode}
+                            onClick={() => saveGameMode("MANTRA")}
+                        >
+                            Mantra
+                        </Button>
+                        <Button
+                            type="button"
+                            variant={mode === "CLASSIC" ? "default" : "outline"}
+                            className="rounded-xl"
+                            disabled={savingMode}
+                            onClick={() => saveGameMode("CLASSIC")}
+                        >
+                            Classic
+                        </Button>
+
+                        {savingMode ? (
+                            <span className="text-sm text-slate-500 self-center ml-2">Salvo…</span>
+                        ) : null}
+                    </div>
+                </CardContent>
+            </Card>
+
 
             <Card className="rounded-2xl shadow-sm border-slate-200">
                 <CardHeader>
@@ -799,7 +930,7 @@ const moduleDef = useMemo(() => MODULES.find((m) => m.name === moduleName) ?? MO
                             onChange={(e) => setModuleName(e.target.value)}
                             className="w-full sm:w-[220px] rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm"
                         >
-                            {MODULES.map((m) => (
+                            {moduleDefs.map((m) => (
                                 <option key={m.name} value={m.name}>
                                     {m.name}
                                 </option>
@@ -812,7 +943,7 @@ const moduleDef = useMemo(() => MODULES.find((m) => m.name === moduleName) ?? MO
                             <b>MODULO NON SELEZIONABILE</b>: manca almeno un ruolo necessario (o non hai abbastanza giocatori disponibili).
                         </div>
                     ) : (
-                        <Pitch lineup={ideal.lineup} />
+                        <Pitch lineup={ideal.lineup} mode={mode} />
                     )}
                 </CardContent>
             </Card>

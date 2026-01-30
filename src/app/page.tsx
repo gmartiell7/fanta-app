@@ -138,10 +138,10 @@ export default function Home() {
         }
 
         // ✅ messaggi migliori in base al codice errore
-        if (res?.error === "EMAIL_NOT_VERIFIED") {
-            toast.error("Devi verificare l'email prima di accedere. Controlla la posta.");
-            return;
-        }
+      //  if (res?.error === "EMAIL_NOT_VERIFIED") {
+      //      toast.error("Devi verificare l'email prima di accedere. Controlla la posta.");
+      //      return;
+      //  }
 
         // NextAuth spesso restituisce "CredentialsSignin" se authorize ritorna null
         if (res?.error === "CredentialsSignin") {

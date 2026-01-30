@@ -120,7 +120,7 @@ export async function POST(req: Request) {
       //  });
 
       //  if (!appUrl) {
-            return NextResponse.json({ error: "APP_URL non configurata" }, { status: 500 });
+      //      return NextResponse.json({ error: "APP_URL non configurata" }, { status: 500 });
       //  }
       //  if (!from) {
       //      return NextResponse.json({ error: "RESEND_FROM non configurata" }, { status: 500 });

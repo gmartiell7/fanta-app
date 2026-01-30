@@ -15,7 +15,7 @@ export default async function MePage() {
 
     const dbUser = await prisma.user.findUnique({
         where: { email },
-        select: { id: true, email: true },
+        select: { id: true, email: true, gameMode: true },
     });
 
     if (!dbUser?.id) {
@@ -58,7 +58,12 @@ export default async function MePage() {
             players: {
                 include: {
                     player: {
-                        include: {
+                        select: {
+                            id: true,
+                            name: true,
+                            team: true,
+                            roleMantra: true,
+                            roleClassic: true, // ✅ FONDAMENTALE
                             stats: {
                                 select: {
                                     matchday: true,
@@ -81,6 +86,7 @@ export default async function MePage() {
         },
     });
 
+
     const players = (fullTeam?.players ?? []).map((tp) => tp.player);
 
     return (
@@ -88,10 +94,12 @@ export default async function MePage() {
             <MeClient
                 email={dbUser.email}
                 teamName={team?.name ?? ""}
-                players={players as any}
+                players={players}
                 initialPrediction={prediction?.text ?? ""}
                 listoneTeams={listoneTeams}
+                initialGameMode={dbUser.gameMode}
             />
+
         </main>
     );
 }

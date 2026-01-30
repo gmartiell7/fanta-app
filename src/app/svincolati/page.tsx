@@ -1,23 +1,60 @@
 "use client";
 
-import React, { useEffect, useMemo, useRef, useState, useCallback, useDeferredValue } from "react";
+import React, {
+    useEffect,
+    useMemo,
+    useRef,
+    useState,
+    useCallback,
+    useDeferredValue,
+} from "react";
 import Papa from "papaparse";
 
-type Row = Record<string, any>;
+type GameMode = "MANTRA" | "CLASSIC";
 
-function toNum(v: any): number | null {
+type CsvRow = Record<string, unknown>;
+
+type TeamColor = { badge: string; text: string };
+
+type TeamRosterPlayer = {
+    extId: number;
+    name: string;
+    roleMantra?: string | null;
+    roleClassic?: string | null;
+};
+
+type SvincolatoPlayer = {
+    extId: number;
+    name: string;
+    team: string;
+    roleMantra?: string | null;
+    roleClassic?: string | null;
+    pg: number | null;
+    mv: number | null;
+    fm: number | null;
+};
+
+type RecommendationRow = SvincolatoPlayer & {
+    // campi calcolati dalla tua API /api/svincolati/recommendations
+    pt_mv_rank?: number;
+    pt_fm_rank?: number;
+    pt_duel_mv?: number;
+    pt_duel_fmv?: number;
+    total?: number;
+};
+
+function toNum(v: unknown): number | null {
     if (v == null) return null;
     const n = Number(String(v).replace(",", "."));
     return Number.isFinite(n) ? n : null;
 }
 
-function isEmpty(v: any) {
+function isEmpty(v: unknown) {
     return v == null || String(v).trim() === "";
 }
 
 const MANTRA_ROLES = ["Por", "Dc", "Dd", "Ds", "E", "M", "C", "W", "T", "A", "Pc"];
-
-type TeamColor = { badge: string; text: string };
+const CLASSIC_ROLES = ["P", "D", "C", "A"];
 
 function tierFromRank(pos1based: number) {
     if (pos1based <= 4) return 1;
@@ -51,7 +88,12 @@ function canonicalTeamName(s: string) {
     const lower = t.toLowerCase();
 
     // Verona
-    if (lower === "hellas verona" || lower === "hellasverona" || lower === "ver") return "Verona";
+    if (
+        lower === "hellas verona" ||
+        lower === "hellasverona" ||
+        lower === "ver"
+    )
+        return "Verona";
 
     // Abbreviazioni tipiche listone
     const map: Record<string, string> = {
@@ -91,15 +133,41 @@ function teamKey(s: string) {
         .trim();
 }
 
+function getRoleForMode(
+    mode: GameMode,
+    p: { roleMantra?: string | null; roleClassic?: string | null }
+) {
+    if (mode === "CLASSIC") return String(p.roleClassic ?? "").trim();
+    return String(p.roleMantra ?? "").trim();
+}
+
+function getRolesList(mode: GameMode) {
+    return mode === "CLASSIC" ? CLASSIC_ROLES : MANTRA_ROLES;
+}
+
+function readCsvField(r: CsvRow, keys: string[]) {
+    for (const k of keys) {
+        const v = r[k];
+        if (!isEmpty(v)) return v;
+    }
+    return undefined;
+}
+
 export default function SvincolatiPage() {
-    const [teamPlayers, setTeamPlayers] = useState<any[]>([]);
+    const [mode, setMode] = useState<GameMode>("MANTRA");
+
+    const [teamPlayers, setTeamPlayers] = useState<TeamRosterPlayer[]>([]);
     const [selectedExtId, setSelectedExtId] = useState<number | null>(null);
 
-    const [svPlayers, setSvPlayers] = useState<any[]>([]);
-    const [byRole, setByRole] = useState<Record<string, any[]>>({});
+    const [svPlayers, setSvPlayers] = useState<SvincolatoPlayer[]>([]);
+    const [byRole, setByRole] = useState<Record<string, RecommendationRow[]>>(
+        {}
+    );
     const [loading, setLoading] = useState(false);
 
-    const [teamColorByKey, setTeamColorByKey] = useState<Map<string, TeamColor>>(new Map());
+    const [teamColorByKey, setTeamColorByKey] = useState<Map<string, TeamColor>>(
+        new Map()
+    );
 
     // ✅ FILTRI UI
     const [selectedRole, setSelectedRole] = useState<string>(""); // "" = tutti
@@ -109,10 +177,14 @@ export default function SvincolatiPage() {
     const [notes, setNotes] = useState<Record<number, string>>({});
     const [notesLoading, setNotesLoading] = useState(false);
     const [savingByKey, setSavingByKey] = useState<Record<number, boolean>>({});
-    const [savedTickByKey, setSavedTickByKey] = useState<Record<number, boolean>>({});
+    const [savedTickByKey, setSavedTickByKey] = useState<Record<number, boolean>>(
+        {}
+    );
 
     // ✅ timer tick salvato
-    const saveTickTimers = useRef<Record<number, any>>({});
+    const saveTickTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>(
+        {}
+    );
 
     // ✅ deferred search (stessa logica, UI più fluida)
     const deferredSearchName = useDeferredValue(searchName);
@@ -169,7 +241,8 @@ export default function SvincolatiPage() {
 
             setSavedTickByKey((prev) => ({ ...prev, [playerKey]: true }));
 
-            if (saveTickTimers.current[playerKey]) clearTimeout(saveTickTimers.current[playerKey]);
+            if (saveTickTimers.current[playerKey])
+                clearTimeout(saveTickTimers.current[playerKey]);
             saveTickTimers.current[playerKey] = setTimeout(() => {
                 setSavedTickByKey((prev) => ({ ...prev, [playerKey]: false }));
             }, 1200);
@@ -190,6 +263,28 @@ export default function SvincolatiPage() {
                 if (id) clearTimeout(id);
                 delete timers[Number(k)];
             }
+        };
+    }, []);
+
+    // ✅ carica gameMode utente
+    useEffect(() => {
+        let alive = true;
+
+        async function loadMode() {
+            try {
+                const r = await fetch("/api/me/game-mode", { cache: "no-store" });
+                if (!r.ok) return;
+                const d = await r.json();
+                const gm = String(d?.gameMode ?? "MANTRA").toUpperCase();
+                if (!alive) return;
+                if (gm === "CLASSIC" || gm === "MANTRA") setMode(gm as GameMode);
+            } catch {
+            }
+        }
+
+        loadMode();
+        return () => {
+            alive = false;
         };
     }, []);
 
@@ -226,42 +321,49 @@ export default function SvincolatiPage() {
         };
     }, []);
 
+    // ✅ roster del team (per confronto)
     useEffect(() => {
         fetch("/api/team/players")
             .then((r) => r.json())
             .then((d) => {
-                const roster = d?.roster ?? [];
+                const roster = (d?.roster ?? []) as Array<{ player?: TeamRosterPlayer }>;
                 setTeamPlayers(
                     roster
-                        .map((x: any) => ({
-                            extId: Number(x.player.extId),
-                            name: x.player.name,
-                            roleMantra: x.player.roleMantra,
+                        .map((x) => ({
+                            extId: Number(x?.player?.extId),
+                            name: String(x?.player?.name ?? ""),
+                            roleMantra: x?.player?.roleMantra ?? null,
+                            roleClassic: x?.player?.roleClassic ?? null,
                         }))
-                        .filter((p: any) => Number.isFinite(p.extId))
+                        .filter((p) => Number.isFinite(p.extId) && p.name.length > 0)
                 );
             })
             .catch(() => { });
     }, []);
 
-    const recompute = useCallback(async (players: any[], sel: number | null) => {
-        setLoading(true);
-        try {
-            const res = await fetch("/api/svincolati/recommendations", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ players, selectedExtId: sel }),
-            });
-            const data = await res.json();
-            setByRole(data.byRole ?? {});
-        } finally {
-            setLoading(false);
-        }
-    }, []);
+    const recompute = useCallback(
+        async (players: SvincolatoPlayer[], sel: number | null, gm: GameMode) => {
+            setLoading(true);
+            try {
+                const res = await fetch("/api/svincolati/recommendations", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ players, selectedExtId: sel, gameMode: gm }),
+                });
+                const data = (await res.json().catch(() => ({}))) as {
+                    byRole?: Record<string, RecommendationRow[]>;
+                };
+                setByRole(data.byRole ?? {});
+            } finally {
+                setLoading(false);
+            }
+        },
+        []
+    );
 
     const onFile = useCallback(
         (file: File) => {
-            Papa.parse<Row>(file, {
+            Papa.parse<CsvRow>(file, {
                 header: true,
                 delimiter: ";",
                 skipEmptyLines: true,
@@ -269,60 +371,79 @@ export default function SvincolatiPage() {
                 complete: (res) => {
                     const rows = res.data.filter(Boolean);
 
-                    const players = rows
+                    const players: SvincolatoPlayer[] = rows
                         .filter((r) => isEmpty(r["Fuori lista"]))
-                        .map((r) => ({
-                            extId: Number(r["#"]),
-                            name: r["Nome"],
-                            team: r["Sq."],
-                            roleMantra: r["R.MANTRA"],
-                            pg: toNum(r["PGv"]),
-                            mv: toNum(r["MV"]),
-                            fm: toNum(r["FM"]),
-                        }))
-                        .filter((p) => Number.isFinite(p.extId));
+                        .map((r) => {
+                            // CSV: proviamo a leggere sia Mantra che Classic in modo robusto
+                            const roleMantra = readCsvField(r, ["R.MANTRA", "R MANTRA", "RMANTRA"]);
+                            const roleClassic = readCsvField(r, ["R", "R.CLASSIC", "R CLASSIC", "R.CLA", "R CLA"]);
 
-                    setSvPlayers(players);
-                    recompute(players, selectedExtId);
+                            const p: SvincolatoPlayer = {
+                                extId: Number(readCsvField(r, ["#", "Id", "ID"])),
+                                name: String(readCsvField(r, ["Nome", "Giocatore"]) ?? ""),
+                                team: String(readCsvField(r, ["Sq.", "Squadra", "Squadra."]) ?? ""),
+                                roleMantra: roleMantra != null ? String(roleMantra) : null,
+                                roleClassic: roleClassic != null ? String(roleClassic) : null,
+                                pg: toNum(readCsvField(r, ["PGv", "PG"])),
+                                mv: toNum(readCsvField(r, ["MV"])),
+                                fm: toNum(readCsvField(r, ["FM", "FMV"])),
+                            };
+                            return p;
+                        })
+                        .filter((p) => Number.isFinite(p.extId) && p.name.trim().length > 0);
+
+                    // ✅ se sono in Classic: tengo solo player con roleClassic valorizzato
+                    const filtered =
+                        mode === "CLASSIC"
+                            ? players.filter((p) => String(p.roleClassic ?? "").trim().length > 0)
+                            : players;
+
+                    setSvPlayers(filtered);
+                    recompute(filtered, selectedExtId, mode);
                 },
             });
         },
-        [recompute, selectedExtId]
+        [mode, recompute, selectedExtId]
     );
 
     useEffect(() => {
-        if (svPlayers.length) recompute(svPlayers, selectedExtId);
+        if (svPlayers.length) recompute(svPlayers, selectedExtId, mode);
         // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [selectedExtId]);
+    }, [selectedExtId, mode]);
 
     const removeSvincolato = useCallback(
         (extIdToRemove: number) => {
             setSvPlayers((prev) => {
-                const next = prev.filter((p: any) => Number(p.extId) !== Number(extIdToRemove));
-                recompute(next, selectedExtId);
+                const next = prev.filter((p) => Number(p.extId) !== Number(extIdToRemove));
+                recompute(next, selectedExtId, mode);
                 return next;
             });
         },
-        [recompute, selectedExtId]
+        [recompute, selectedExtId, mode]
     );
 
-    const searchLower = useMemo(() => deferredSearchName.trim().toLowerCase(), [deferredSearchName]);
+    const searchLower = useMemo(
+        () => deferredSearchName.trim().toLowerCase(),
+        [deferredSearchName]
+    );
+
+    const rolesUniverse = useMemo(() => getRolesList(mode), [mode]);
 
     const availableRoles = useMemo(() => {
         const has = (r: string) => (byRole[r] ?? []).length > 0;
-        return MANTRA_ROLES.filter(has);
-    }, [byRole]);
+        return rolesUniverse.filter(has);
+    }, [byRole, rolesUniverse]);
 
     // ✅ base roles (prima del filtro nome)
     const baseRolesToShow = useMemo(() => {
         if (selectedRole) return [selectedRole];
 
-        if (selectedExtId == null) return MANTRA_ROLES;
+        if (selectedExtId == null) return rolesUniverse;
 
-        return MANTRA_ROLES.filter((r) =>
-            (byRole[r] ?? []).some((p: any) => Number(p.extId) === Number(selectedExtId))
+        return rolesUniverse.filter((r) =>
+            (byRole[r] ?? []).some((p) => Number(p.extId) === Number(selectedExtId))
         );
-    }, [byRole, selectedExtId, selectedRole]);
+    }, [byRole, selectedExtId, selectedRole, rolesUniverse]);
 
     // ✅ se cerco un nome: mostro SOLO i ruoli dove c'è almeno un match
     const rolesToShow = useMemo(() => {
@@ -331,34 +452,50 @@ export default function SvincolatiPage() {
 
         return base.filter((role) => {
             const list = byRole[role] ?? [];
-            return list.some((p: any) => String(p.name ?? "").toLowerCase().includes(searchLower));
+            return list.some((p) =>
+                String(p.name ?? "").toLowerCase().includes(searchLower)
+            );
         });
     }, [baseRolesToShow, byRole, searchLower]);
+
+    const roleLabel = mode === "CLASSIC" ? "R.CLASSIC" : "R.MANTRA";
 
     return (
         <div className="p-6 space-y-6">
             <div className="flex items-center justify-between gap-4 flex-wrap">
                 <h1 className="text-2xl font-semibold">Consigli svincolati</h1>
-                <div className="text-xs text-gray-500">{notesLoading ? "Carico note…" : "Note: salvate su DB"}</div>
+                <div className="text-xs text-gray-500">
+                    {notesLoading ? "Carico note…" : "Note: salvate su DB"}
+                </div>
             </div>
 
             <div className="flex gap-4 items-center flex-wrap">
-                <input type="file" accept=".csv" onChange={(e) => e.target.files && onFile(e.target.files[0])} />
+                <input
+                    type="file"
+                    accept=".csv"
+                    onChange={(e) => e.target.files && onFile(e.target.files[0])}
+                />
 
                 <select
                     className="border px-2 py-1"
                     value={selectedExtId ?? ""}
-                    onChange={(e) => setSelectedExtId(e.target.value ? Number(e.target.value) : null)}
+                    onChange={(e) =>
+                        setSelectedExtId(e.target.value ? Number(e.target.value) : null)
+                    }
                 >
                     <option value="">(confronta con un tuo giocatore)</option>
                     {teamPlayers.map((p) => (
                         <option key={p.extId} value={p.extId}>
-                            {p.name} ({p.roleMantra})
+                            {p.name} ({getRoleForMode(mode, p)})
                         </option>
                     ))}
                 </select>
 
-                <select className="border px-2 py-1" value={selectedRole} onChange={(e) => setSelectedRole(e.target.value)}>
+                <select
+                    className="border px-2 py-1"
+                    value={selectedRole}
+                    onChange={(e) => setSelectedRole(e.target.value)}
+                >
                     <option value="">(tutti i ruoli)</option>
                     {availableRoles.map((r) => (
                         <option key={r} value={r}>
@@ -383,23 +520,29 @@ export default function SvincolatiPage() {
                 )}
             </div>
 
-            {/* ✅ se sto cercando un nome e non c'è nessun match in nessun ruolo */}
             {searchLower.length > 0 && rolesToShow.length === 0 && (
-                <div className="text-sm text-gray-500">Nessun risultato per la ricerca.</div>
+                <div className="text-sm text-gray-500">
+                    Nessun risultato per la ricerca.
+                </div>
             )}
 
             {rolesToShow.map((role) => {
-                const rawList = byRole[role] ?? [];
+                const rawList = (byRole[role] ?? []) as RecommendationRow[];
                 if (!rawList.length) return null;
 
                 const list =
                     searchLower.length === 0
                         ? rawList
-                        : rawList.filter((p: any) => String(p.name ?? "").toLowerCase().includes(searchLower));
+                        : rawList.filter((p) =>
+                            String(p.name ?? "").toLowerCase().includes(searchLower)
+                        );
 
                 if (!list.length) return null;
 
-                const me = selectedExtId != null ? rawList.find((p: any) => Number(p.extId) === Number(selectedExtId)) : null;
+                const me =
+                    selectedExtId != null
+                        ? rawList.find((p) => Number(p.extId) === Number(selectedExtId))
+                        : null;
                 const meTot = me ? Number(me.total ?? 0) : null;
 
                 return (
@@ -413,7 +556,7 @@ export default function SvincolatiPage() {
                                         <th className="px-3 py-2">#</th>
                                         <th className="px-3 py-2 text-left">Giocatore</th>
                                         <th className="px-3 py-2">Sq</th>
-                                        <th className="px-3 py-2">R.MANTRA</th>
+                                        <th className="px-3 py-2">{roleLabel}</th>
                                         <th className="px-3 py-2">PG</th>
                                         <th className="px-3 py-2">MV</th>
                                         <th className="px-3 py-2">FM</th>
@@ -428,7 +571,7 @@ export default function SvincolatiPage() {
                                 </thead>
 
                                 <tbody>
-                                    {list.map((p: any, i: number) => {
+                                    {list.map((p, i) => {
                                         const tot = Number(p.total ?? 0);
 
                                         let bgColor: string | undefined = undefined;
@@ -438,9 +581,10 @@ export default function SvincolatiPage() {
                                             else bgColor = "#fefce8";
                                         }
 
-                                        const isMe = selectedExtId != null && Number(p.extId) === Number(selectedExtId);
+                                        const isMe =
+                                            selectedExtId != null &&
+                                            Number(p.extId) === Number(selectedExtId);
 
-                                        // ✅ O(1) invece di svPlayers.some(...)
                                         const isFromCsv = svExtIdSet.has(Number(p.extId));
                                         const canDelete = isFromCsv && !isMe;
 
@@ -451,6 +595,8 @@ export default function SvincolatiPage() {
                                         const saving = !!savingByKey[key];
                                         const savedTick = !!savedTickByKey[key];
 
+                                        const roleValue = getRoleForMode(mode, p);
+
                                         return (
                                             <tr
                                                 key={`${p.extId}-${role}-${i}`}
@@ -459,7 +605,9 @@ export default function SvincolatiPage() {
                                             >
                                                 <td className="px-3 py-2">{i + 1}</td>
 
-                                                <td className={`px-3 py-2 text-left ${c ? c.text : ""}`}>{p.name}</td>
+                                                <td className={`px-3 py-2 text-left ${c ? c.text : ""}`}>
+                                                    {p.name}
+                                                </td>
 
                                                 <td className="px-3 py-2 text-center">
                                                     {p.team ? (
@@ -474,11 +622,15 @@ export default function SvincolatiPage() {
                                                     )}
                                                 </td>
 
-                                                <td className="px-3 py-2 text-center">{p.roleMantra}</td>
+                                                <td className="px-3 py-2 text-center">{roleValue || "-"}</td>
 
                                                 <td className="px-3 py-2 text-right">{p.pg ?? "-"}</td>
-                                                <td className="px-3 py-2 text-right">{p.mv == null ? "-" : Number(p.mv).toFixed(2)}</td>
-                                                <td className="px-3 py-2 text-right">{p.fm == null ? "-" : Number(p.fm).toFixed(2)}</td>
+                                                <td className="px-3 py-2 text-right">
+                                                    {p.mv == null ? "-" : Number(p.mv).toFixed(2)}
+                                                </td>
+                                                <td className="px-3 py-2 text-right">
+                                                    {p.fm == null ? "-" : Number(p.fm).toFixed(2)}
+                                                </td>
 
                                                 <td className="px-3 py-2 text-right">{p.pt_mv_rank ?? "-"}</td>
                                                 <td className="px-3 py-2 text-right">{p.pt_fm_rank ?? "-"}</td>
@@ -523,7 +675,10 @@ export default function SvincolatiPage() {
                                                             🗑️
                                                         </button>
                                                     ) : (
-                                                        <span className="text-gray-300" title={isMe ? "Giocatore selezionato" : ""}>
+                                                        <span
+                                                            className="text-gray-300"
+                                                            title={isMe ? "Giocatore selezionato" : ""}
+                                                        >
                                                             🗑️
                                                         </span>
                                                     )}

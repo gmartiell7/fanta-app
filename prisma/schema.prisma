@@ -12,42 +12,50 @@ enum Role {
   ADMIN
 }
 
+enum GameMode {
+  MANTRA
+  CLASSIC
+}
+
 model User {
-  id       String  @id @default(cuid())
-  email    String  @unique
-  password String
-  name     String?
-  role     Role    @default(USER)
+  id            String   @id @default(cuid())
+  email         String   @unique
+  password      String
+  name          String?
+  role          Role     @default(USER)
 
-   emailVerified Boolean @default(false)
+  emailVerified Boolean  @default(false)
+  gameMode      GameMode @default(MANTRA)
 
-  team Team?
+  team          Team?
+  prediction    UserPrediction?
 
-  prediction UserPrediction?
+  // ✅ opzionale ma consigliato: relazione note svincolati
+  freeAgentNotes FreeAgentNote[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 }
 
 model Player {
-  id    String @id @default(cuid())
-  extId Int    @unique
-  name  String
+  id          String @id @default(cuid())
+  extId       Int    @unique
+  name        String
 
   // ✅ Primario (Mantra): string (es. "Por", "Dd", "Ds", "W", "A", "Pc", ...)
-  roleMantra String
+  roleMantra  String
 
   // ✅ Secondario (Classic): string (es. "P","D","C","A")
   roleClassic String?
 
-  team  String
-  price Int    @default(0)
+  team        String
+  price       Int    @default(0)
 
-  teams TeamPlayer[]
-  stats MatchdayStat[]
+  teams       TeamPlayer[]
+  stats       MatchdayStat[]
 
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
 
   @@index([roleMantra])
   @@index([roleClassic])
@@ -56,13 +64,13 @@ model Player {
 }
 
 model Team {
-  id   String @id @default(cuid())
-  name String
+  id        String @id @default(cuid())
+  name      String
 
-  ownerId String @unique
-  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  ownerId   String @unique
+  owner     User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
 
-  players TeamPlayer[]
+  players   TeamPlayer[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -73,10 +81,10 @@ model TeamPlayer {
   teamId      String
   playerExtId Int
 
-  team   Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
-  player Player @relation(fields: [playerExtId], references: [extId], onDelete: Cascade)
+  team        Team   @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  player      Player @relation(fields: [playerExtId], references: [extId], onDelete: Cascade)
 
-  createdAt DateTime @default(now())
+  createdAt   DateTime @default(now())
 
   @@unique([teamId, playerExtId])
   @@index([playerExtId])
@@ -84,24 +92,24 @@ model TeamPlayer {
 }
 
 model MatchdayStat {
-  id       String @id @default(cuid())
-  matchday Int
-  playerId String
+  id        String @id @default(cuid())
+  matchday  Int
+  playerId  String
 
-  voteRaw String?
-  vote    Float?
+  voteRaw   String?
+  vote      Float?
 
-  gf  Int @default(0)
-  gs  Int @default(0)
-  rp  Int @default(0)
-  rs  Int @default(0)
-  rf  Int @default(0)
-  au  Int @default(0)
-  amm Int @default(0)
-  esp Int @default(0)
-  ass Int @default(0)
+  gf        Int @default(0)
+  gs        Int @default(0)
+  rp        Int @default(0)
+  rs        Int @default(0)
+  rf        Int @default(0)
+  au        Int @default(0)
+  amm       Int @default(0)
+  esp       Int @default(0)
+  ass       Int @default(0)
 
-  player Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  player    Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -118,18 +126,18 @@ model UserPrediction {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user      User @relation(fields: [userId], references: [id], onDelete: Cascade)
 }
 
 model SerieACalendarMatch {
-  id       String    @id @default(cuid())
-  season   String
-  matchday Int
-  date     DateTime?
-  location String?
-  homeTeam String
-  awayTeam String
-  result   String?
+  id        String   @id @default(cuid())
+  season    String
+  matchday  Int
+  date      DateTime?
+  location  String?
+  homeTeam  String
+  awayTeam  String
+  result    String?
 
   createdAt DateTime @default(now())
 
@@ -144,6 +152,9 @@ model FreeAgentNote {
   note      String   @db.Text
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  // ✅ opzionale ma consigliato: relazione a User (così puoi include/where più comodi)
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, playerKey])
   @@index([userId])
