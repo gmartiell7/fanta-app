@@ -94,52 +94,52 @@ export async function POST(req: Request) {
                 email,
                 password: hashedPassword,
                 name: name || null,
-                emailVerified: false,
+                emailVerified: true, // ✅ attivo subito
             },
             select: { id: true, email: true },
         });
 
         // evita accumulo di token
-        await prisma.emailVerificationToken.deleteMany({ where: { email } });
+      //  await prisma.emailVerificationToken.deleteMany({ where: { email } });
 
-        const rawToken = crypto.randomBytes(32).toString("hex");
-        const tokenHash = sha256(rawToken);
-        const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
+      //  const rawToken = crypto.randomBytes(32).toString("hex");
+      //  const tokenHash = sha256(rawToken);
+      //  const expiresAt = new Date(Date.now() + 1000 * 60 * 30);
 
-        await prisma.emailVerificationToken.create({
-            data: { tokenHash, email, expiresAt },
-        });
+      //  await prisma.emailVerificationToken.create({
+      //      data: { tokenHash, email, expiresAt },
+      //  });
 
-        const from = process.env.RESEND_FROM;
-        const appUrl = process.env.APP_URL;
+      //  const from = process.env.RESEND_FROM;
+      //  const appUrl = process.env.APP_URL;
 
-        console.log("RESEND_ENV", {
-            hasKey: Boolean(process.env.RESEND_API_KEY),
-            from,
-            appUrl,
-        });
+      //  console.log("RESEND_ENV", {
+      //      hasKey: Boolean(process.env.RESEND_API_KEY),
+      //      from,
+      //      appUrl,
+      //  });
 
-        if (!appUrl) {
+      //  if (!appUrl) {
             return NextResponse.json({ error: "APP_URL non configurata" }, { status: 500 });
-        }
-        if (!from) {
-            return NextResponse.json({ error: "RESEND_FROM non configurata" }, { status: 500 });
-        }
+      //  }
+      //  if (!from) {
+      //      return NextResponse.json({ error: "RESEND_FROM non configurata" }, { status: 500 });
+      //  }
 
-        const verifyUrl = `${appUrl}/verify-email?token=${rawToken}`;
+      //  const verifyUrl = `${appUrl}/verify-email?token=${rawToken}`;
 
-        const result = await resend.emails.send({
-            from,
-            to: email,
-            subject: "Verifica la tua email",
-            html: `
-        <p>Clicca per verificare la tua email:</p>
-        <p><a href="${verifyUrl}">Verifica email</a></p>
-        <p>Se non sei stato tu, ignora questa email.</p>
-      `,
-        });
+      //  const result = await resend.emails.send({
+      //      from,
+      //      to: email,
+      //      subject: "Verifica la tua email",
+      //      html: `
+      //  <p>Clicca per verificare la tua email:</p>
+      //  <p><a href="${verifyUrl}">Verifica email</a></p>
+      //  <p>Se non sei stato tu, ignora questa email.</p>
+      //  `,
+      //  });
 
-        console.log("RESEND_RESULT", result);
+      //  console.log("RESEND_RESULT", result);
 
         return NextResponse.json(
             { id: user.id, email: user.email, emailVerified: false },

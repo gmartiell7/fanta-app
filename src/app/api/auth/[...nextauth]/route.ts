@@ -33,10 +33,10 @@ export const authOptions: NextAuthOptions = {
                 if (!user) return null;
 
                 // ✅ blocca login finché non verifica email
-                if (!user.emailVerified) {
+              //  if (!user.emailVerified) {
                     // Questo diventa result.error lato client (signIn)
-                    throw new Error("EMAIL_NOT_VERIFIED");
-                }
+              //      throw new Error("EMAIL_NOT_VERIFIED");
+              //  }
 
                 const ok = await bcrypt.compare(credentials.password, user.password);
                 if (!ok) return null;
