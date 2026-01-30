@@ -19,6 +19,8 @@ model User {
   name     String?
   role     Role    @default(USER)
 
+   emailVerified Boolean @default(false)
+
   team Team?
 
   prediction UserPrediction?
@@ -145,4 +147,14 @@ model FreeAgentNote {
 
   @@unique([userId, playerKey])
   @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  email     String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  @@index([email])
 }

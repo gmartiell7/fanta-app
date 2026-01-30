@@ -1,162 +1,119 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { toast } from "sonner";
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react";
 
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Separator } from "@/components/ui/separator";
+type UserWithRole = {
+    role?: string;
+};
 
-export default function AdminVotiPage() {
-    const router = useRouter();
+const TOTAL_MATCHDAYS = 38;
+
+export default function AdminPage() {
     const { data: session, status } = useSession();
-
-    const isAdmin = (session?.user as any)?.isAdmin === true;
-    const email = session?.user?.email ?? "";
-
     const [file, setFile] = useState<File | null>(null);
-    const [matchday, setMatchday] = useState<string>("");
-    const [loading, setLoading] = useState(false);
 
-    const fileInputRef = useRef<HTMLInputElement | null>(null);
+    const [loadedDays, setLoadedDays] = useState<number[]>([]);
+    const [loadingDays, setLoadingDays] = useState(false);
 
-    // 🔒 Guard: solo admin
-    useEffect(() => {
-        if (status === "loading") return;
+    if (status === "loading") return <p>Caricamento...</p>;
 
-        if (status !== "authenticated") {
-            router.replace("/");
-            return;
-        }
+    const role = (session?.user as UserWithRole | undefined)?.role;
+    if (!session || role !== "ADMIN") {
+        return <p>Accesso negato</p>;
+    }
 
-        if (!isAdmin) {
-            router.replace("/team");
-        }
-    }, [status, isAdmin, router]);
-
-    async function upload() {
-        if (!isAdmin) {
-            toast.error("Non sei autorizzato");
-            return;
-        }
-        if (!file) {
-            toast.error("Seleziona un file");
-            return;
-        }
-
-        setLoading(true);
+    async function fetchLoadedDays() {
+        setLoadingDays(true);
         try {
-            const fd = new FormData();
-            fd.append("file", file);
-            if (matchday.trim()) fd.append("matchday", matchday.trim());
-
-            const res = await fetch("/api/admin/stats/upload", {
-                method: "POST",
-                body: fd,
-            });
-
+            const res = await fetch("/api/admin/matchdays/loaded", { cache: "no-store" });
             const data = await res.json();
-            if (!res.ok) throw new Error(data?.error ?? "Upload fallito");
-
-            toast.success(
-                `OK: Giornata ${data.matchday} · Inserite ${data.inserted} · Non trovati ${data.notFoundPlayers}`
-            );
-
-            // UX: reset dopo successo
-            setFile(null);
-            setMatchday("");
-            if (fileInputRef.current) fileInputRef.current.value = "";
-        } catch (e: any) {
-            toast.error(e?.message ?? "Errore upload");
+            setLoadedDays(Array.isArray(data.loaded) ? data.loaded : []);
         } finally {
-            setLoading(false);
+            setLoadingDays(false);
         }
     }
 
-    // Loading state (evita flicker)
-    if (status === "loading") {
-        return (
-            <div className="mx-auto max-w-2xl px-4 py-6">
-                <Card className="rounded-2xl shadow-sm border-slate-200">
-                    <CardHeader className="space-y-1">
-                        <CardTitle>Admin · Inserimento voti</CardTitle>
-                        <div className="text-sm text-muted-foreground">Caricamento…</div>
-                    </CardHeader>
-                </Card>
-            </div>
-        );
-    }
+    useEffect(() => {
+        fetchLoadedDays();
+    }, []);
 
-    // Se non autenticato o non admin: l'effetto farà redirect (qui render minimo)
-    if (status !== "authenticated" || !isAdmin) return null;
+    const loadedSet = useMemo(() => new Set(loadedDays), [loadedDays]);
+
+    const upload = async () => {
+        if (!file) return;
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        const res = await fetch("/api/admin/players/upload", {
+            method: "POST",
+            body: formData,
+        });
+
+        const data = await res.json();
+        alert(`Inseriti ${data.inserted} giocatori`);
+
+        // ✅ se stai caricando i voti, aggiorna subito il verde
+        await fetchLoadedDays();
+    };
 
     return (
-        <div className="mx-auto max-w-2xl px-4 py-6">
-            <Card className="rounded-2xl shadow-sm border-slate-200">
-                <CardHeader className="space-y-2">
-                    <CardTitle className="flex items-center justify-between gap-3">
-                        <span>Admin · Inserimento voti</span>
-                        <span className="text-xs font-medium text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-full px-3 py-1">
-                            area riservata
-                        </span>
-                    </CardTitle>
+        <main className="p-6 space-y-4">
+            <h1 className="text-2xl font-bold">Admin – Carica voto</h1>
 
-                    <div className="text-sm text-muted-foreground">
-                        Carica il file voti “sporco” (righe di testo + sezione squadra). Puoi inserire la
-                        giornata manualmente oppure lasciare vuoto se nel file c’è “21ª giornata”.
-                    </div>
+            <input
+                type="file"
+                accept=".csv"
+                onChange={(e) => setFile(e.target.files?.[0] || null)}
+            />
 
-                    {!!email && (
-                        <div className="text-xs text-slate-600">
-                            Loggato come: <span className="font-medium">{email}</span>
-                        </div>
-                    )}
-                </CardHeader>
+            <button
+                className="bg-black text-white px-4 py-2 rounded"
+                onClick={upload}
+            >
+                Carica voto
+            </button>
 
-                <CardContent className="space-y-4">
-                    <Separator />
+            {/* ✅ SOTTO AL PULSANTE: GIORNATE */}
+            <div className="space-y-2 pt-2">
+                <div className="flex items-center justify-between">
+                    <p className="font-semibold">Giornate (1–{TOTAL_MATCHDAYS})</p>
 
-                    <div className="grid gap-4">
-                        <div className="space-y-2">
-                            <div className="text-xs text-muted-foreground">Giornata (opzionale)</div>
-                            <Input
-                                value={matchday}
-                                onChange={(e) => setMatchday(e.target.value)}
-                                placeholder="es. 21"
-                                inputMode="numeric"
-                                className="rounded-xl"
-                            />
-                        </div>
+                    <button
+                        className="text-sm underline"
+                        onClick={fetchLoadedDays}
+                        disabled={loadingDays}
+                    >
+                        {loadingDays ? "Aggiorno..." : "Aggiorna"}
+                    </button>
+                </div>
 
-                        <div className="space-y-2">
-                            <div className="text-xs text-muted-foreground">File voti</div>
-                            <Input
-                                ref={fileInputRef}
-                                type="file"
-                                accept=".csv,.txt,.tsv"
-                                onChange={(e) => setFile(e.target.files?.[0] ?? null)}
-                                className="rounded-xl"
-                            />
-                            {file && (
-                                <div className="text-xs text-slate-600">
-                                    Selezionato: <span className="font-medium">{file.name}</span>
-                                </div>
-                            )}
-                        </div>
+                <div className="grid grid-cols-8 sm:grid-cols-12 md:grid-cols-14 gap-2">
+                    {Array.from({ length: TOTAL_MATCHDAYS }, (_, i) => i + 1).map((day) => {
+                        const isLoaded = loadedSet.has(day);
+                        return (
+                            <div
+                                key={day}
+                                className={[
+                                    "rounded-md border px-2 py-1 text-center text-sm font-medium",
+                                    isLoaded
+                                        ? "border-green-600 bg-green-100 text-green-800"
+                                        : "border-gray-200 bg-white text-gray-500",
+                                ].join(" ")}
+                                title={isLoaded ? "Voti caricati" : "Non caricata"}
+                            >
+                                {day}
+                            </div>
+                        );
+                    })}
+                </div>
 
-                        <Button
-                            onClick={upload}
-                            disabled={loading || !file}
-                            className="w-full rounded-xl transition active:scale-[0.99]"
-                        >
-                            {loading ? "Caricamento..." : "Carica voti"}
-                        </Button>
-                    </div>
-                </CardContent>
-            </Card>
-        </div>
+                <p className="text-sm text-gray-500">
+                    Caricate: <span className="font-semibold">{loadedDays.length}</span> /{" "}
+                    {TOTAL_MATCHDAYS}
+                </p>
+            </div>
+        </main>
     );
 }

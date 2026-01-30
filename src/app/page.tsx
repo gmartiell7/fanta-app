@@ -19,6 +19,9 @@ export default function Home() {
     const [regPassword2, setRegPassword2] = useState("");
     const [isRegistering, setIsRegistering] = useState(false);
 
+    // Honeypot (campo che deve rimanere vuoto)
+    const [website, setWebsite] = useState("");
+
     // Redirect dopo login (con refresh per aggiornare Server Components come NavbarServer)
     useEffect(() => {
         if (!session) return;
@@ -35,16 +38,44 @@ export default function Home() {
         return <p className="p-6">Caricamento...</p>;
     }
 
+    function isEmailValid(email: string) {
+        return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim().toLowerCase());
+    }
+
+    function passwordPolicy(pw: string) {
+        // Allineata al server: min 10 + (lower/upper/number/symbol)
+        const minLen = 10;
+        return (
+            pw.length >= minLen &&
+            /[a-z]/.test(pw) &&
+            /[A-Z]/.test(pw) &&
+            /\d/.test(pw) &&
+            /[^A-Za-z0-9]/.test(pw)
+        );
+    }
+
     async function handleRegister() {
-        if (!regEmail.trim() || !regPassword) {
+        const email = regEmail.trim().toLowerCase();
+        const pw = regPassword;
+
+        if (!email || !pw) {
             toast.error("Inserisci email e password.");
             return;
         }
-        if (regPassword.length < 6) {
-            toast.error("Password troppo corta (min 6 caratteri).");
+
+        if (!isEmailValid(email)) {
+            toast.error("Email non valida.");
             return;
         }
-        if (regPassword !== regPassword2) {
+
+        if (!passwordPolicy(pw)) {
+            toast.error(
+                "Password troppo debole: min 10 caratteri con maiuscola, minuscola, numero e simbolo."
+            );
+            return;
+        }
+
+        if (pw !== regPassword2) {
             toast.error("Le password non coincidono.");
             return;
         }
@@ -55,7 +86,11 @@ export default function Home() {
             const res = await fetch("/api/register", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ email: regEmail, password: regPassword }),
+                body: JSON.stringify({
+                    email,
+                    password: pw,
+                    website, // honeypot (deve restare vuoto)
+                }),
             });
 
             let data: any = null;
@@ -68,14 +103,17 @@ export default function Home() {
                 return;
             }
 
-            toast.success("Registrazione completata! Ora fai login.");
+            toast.success("Registrazione completata! Controlla l'email per verificare l'account.");
 
-            setLoginEmail(regEmail);
-            setLoginPassword(regPassword);
+            // Precompila login
+            setLoginEmail(email);
+            setLoginPassword(pw);
 
+            // reset form
             setRegEmail("");
             setRegPassword("");
             setRegPassword2("");
+            setWebsite("");
         } catch (e: any) {
             toast.error(e?.message ?? "Errore di rete.");
         } finally {
@@ -84,8 +122,10 @@ export default function Home() {
     }
 
     async function handleLogin() {
+        const email = loginEmail.trim().toLowerCase();
+
         const res = await signIn("credentials", {
-            email: loginEmail,
+            email,
             password: loginPassword,
             redirect: false,
         });
@@ -97,6 +137,17 @@ export default function Home() {
             return;
         }
 
+        // ✅ messaggi migliori in base al codice errore
+        if (res?.error === "EMAIL_NOT_VERIFIED") {
+            toast.error("Devi verificare l'email prima di accedere. Controlla la posta.");
+            return;
+        }
+
+        // NextAuth spesso restituisce "CredentialsSignin" se authorize ritorna null
+        if (res?.error === "CredentialsSignin") {
+            toast.error("Credenziali non valide.");
+            return;
+        }
 
         toast.error(`Login KO: ${res?.error ?? "errore"}`);
     }
@@ -145,8 +196,11 @@ export default function Home() {
                                         type="password"
                                         value={regPassword}
                                         onChange={(e) => setRegPassword(e.target.value)}
-                                        placeholder="min 6 caratteri"
+                                        placeholder="min 10, maiuscola/minuscola/numero/simbolo"
                                     />
+                                    <p className="mt-1 text-xs text-gray-500">
+                                        Min 10 caratteri, con maiuscola, minuscola, numero e simbolo.
+                                    </p>
                                 </div>
 
                                 <div>
@@ -159,6 +213,18 @@ export default function Home() {
                                     />
                                 </div>
 
+                                {/* Honeypot: nascosto ma presente (bot spesso lo compila) */}
+                                <div className="hidden">
+                                    <label className="block text-sm mb-1">Website</label>
+                                    <input
+                                        className={inputClass}
+                                        value={website}
+                                        onChange={(e) => setWebsite(e.target.value)}
+                                        autoComplete="off"
+                                        tabIndex={-1}
+                                    />
+                                </div>
+
                                 <button
                                     className="bg-black text-white rounded px-4 py-2 w-full disabled:opacity-60"
                                     onClick={handleRegister}
@@ -168,7 +234,7 @@ export default function Home() {
                                 </button>
 
                                 <p className="text-xs text-gray-500">
-                                    La registrazione chiama <code>/api/register</code>.
+                                    La registrazione chiama <code>/api/register</code> e invia la mail di verifica.
                                 </p>
                             </div>
                         </section>
@@ -197,16 +263,24 @@ export default function Home() {
                                     />
                                 </div>
 
-                                <button className="bg-black text-white rounded px-4 py-2 w-full" onClick={handleLogin}>
+                                <button
+                                    className="bg-black text-white rounded px-4 py-2 w-full"
+                                    onClick={handleLogin}
+                                >
                                     Login
                                 </button>
+
+                                <p className="text-xs text-gray-500">
+                                    Se non hai verificato l’email, il login verrà bloccato.
+                                </p>
                             </div>
                         </section>
                     </div>
                 ) : (
                     <div className="max-w-xl mx-auto border rounded-2xl p-6 bg-white shadow-sm text-center space-y-2">
                         <p className="text-gray-700">
-                            Login effettuato come <span className="font-semibold">{session.user?.email}</span>
+                            Login effettuato come{" "}
+                            <span className="font-semibold">{session.user?.email}</span>
                         </p>
                         <p className="text-gray-500 text-sm">
                             Reindirizzamento in corso a <span className="font-mono">/me</span>…
