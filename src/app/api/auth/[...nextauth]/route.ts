@@ -20,8 +20,23 @@ export const authOptions: NextAuthOptions = {
 
                 const user = await prisma.user.findUnique({
                     where: { email },
+                    select: {
+                        id: true,
+                        email: true,
+                        name: true,
+                        role: true,
+                        password: true,
+                        emailVerified: true, // ✅ IMPORTANT
+                    },
                 });
+
                 if (!user) return null;
+
+                // ✅ blocca login finché non verifica email
+                if (!user.emailVerified) {
+                    // Questo diventa result.error lato client (signIn)
+                    throw new Error("EMAIL_NOT_VERIFIED");
+                }
 
                 const ok = await bcrypt.compare(credentials.password, user.password);
                 if (!ok) return null;
@@ -30,7 +45,7 @@ export const authOptions: NextAuthOptions = {
                     id: user.id,
                     email: user.email,
                     name: user.name,
-                    role: user.role, // lo teniamo comunque se ti serve
+                    role: user.role,
                 } as any;
             },
         }),
@@ -61,6 +76,9 @@ export const authOptions: NextAuthOptions = {
             return session;
         },
     },
+
+    // (opzionale ma consigliato) pagina custom di login se la usi già
+    // pages: { signIn: "/login" },
 };
 
 const handler = NextAuth(authOptions);

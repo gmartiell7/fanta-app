@@ -6,7 +6,6 @@ import { registerRatelimit } from "@/lib/ratelimit";
 import { resend } from "@/lib/mail";
 
 function getClientIp(req: Request) {
-    // Su Vercel: request headers disponibili, inclusi forwarded headers. :contentReference[oaicite:3]{index=3}
     const vercelFwd = req.headers.get("x-vercel-forwarded-for");
     const fwd = req.headers.get("x-forwarded-for");
     const ip = (vercelFwd ?? fwd ?? "").split(",")[0]?.trim();
@@ -56,7 +55,6 @@ export async function POST(req: Request) {
             website?: string; // honeypot
         };
 
-        // honeypot anti-bot
         if (website && String(website).trim() !== "") {
             return NextResponse.json({ error: "Richiesta non valida" }, { status: 400 });
         }
@@ -77,10 +75,7 @@ export async function POST(req: Request) {
         }
 
         if (!passwordPolicy(password)) {
-            return NextResponse.json(
-                { error: "Password troppo debole." },
-                { status: 400 }
-            );
+            return NextResponse.json({ error: "Password troppo debole." }, { status: 400 });
         }
 
         const existingUser = await prisma.user.findUnique({
@@ -104,24 +99,37 @@ export async function POST(req: Request) {
             select: { id: true, email: true },
         });
 
-        // crea token verifica
+        // ✅ evita accumulo di token per la stessa email
+        await prisma.emailVerificationToken.deleteMany({ where: { email } });
+
         const rawToken = crypto.randomBytes(32).toString("hex");
         const tokenHash = sha256(rawToken);
         const expiresAt = new Date(Date.now() + 1000 * 60 * 30); // 30 min
 
         await prisma.emailVerificationToken.create({
-            data: {
-                tokenHash,
-                email,
-                expiresAt,
-            },
+            data: { tokenHash, email, expiresAt },
         });
 
-        const verifyUrl = `${process.env.APP_URL}/verify-email?token=${rawToken}`;
+        const appUrl = process.env.APP_URL;
+        if (!appUrl) {
+            return NextResponse.json(
+                { error: "APP_URL non configurata" },
+                { status: 500 }
+            );
+        }
 
-        // invia email
+        const verifyUrl = `${appUrl}/verify-email?token=${rawToken}`;
+
+        const from = process.env.RESEND_FROM;
+        if (!from) {
+            return NextResponse.json(
+                { error: "RESEND_FROM non configurata" },
+                { status: 500 }
+            );
+        }
+
         await resend.emails.send({
-            from: "gmartiell7@gmail.com",
+            from,
             to: email,
             subject: "Verifica la tua email",
             html: `
@@ -140,6 +148,25 @@ export async function POST(req: Request) {
             return NextResponse.json({ error: "Email già registrata" }, { status: 409 });
         }
         console.error("REGISTER_ERROR:", error);
+        console.log("RESEND_ENV", {
+            hasKey: Boolean(process.env.RESEND_API_KEY),
+            from: process.env.RESEND_FROM,
+            appUrl: process.env.APP_URL,
+        });
+
+        const result = await resend.emails.send({
+            from,
+            to: email,
+            subject: "Verifica la tua email",
+            html: `
+    <p>Clicca per verificare la tua email:</p>
+    <p><a href="${verifyUrl}">Verifica email</a></p>
+    <p>Se non sei stato tu, ignora questa email.</p>
+  `,
+        });
+
+        console.log("RESEND_RESULT", result);
+
         return NextResponse.json({ error: "Errore interno" }, { status: 500 });
     }
 }
