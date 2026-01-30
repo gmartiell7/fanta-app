@@ -35,7 +35,7 @@ type PlayerFromDB = {
 };
 
 function splitRoles(role?: string | null) {
-    return String(roleMantra ?? "")
+    return String(role ?? "")
         .split(/[\/;]+/)
         .map((s) => s.trim())
         .filter(Boolean);
