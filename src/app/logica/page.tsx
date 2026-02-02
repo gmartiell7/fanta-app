@@ -8,6 +8,7 @@ export const dynamic = "force-dynamic";
 export const revalidate = 0;
 
 const MANTRA_ORDER = ["Por", "Dc", "Dd", "Ds", "E", "M", "C", "W", "T", "A", "Pc"] as const;
+const CLASSIC_ORDER = ["P", "D", "C", "A"] as const;
 
 function splitRoles(roleMantra?: string | null) {
     return String(roleMantra ?? "")
@@ -586,8 +587,9 @@ export default async function LogicaPage() {
 
     const dbUser = await prisma.user.findUnique({
         where: { email },
-        select: { id: true },
+        select: { id: true, gameMode: true },
     });
+
 
     if (!dbUser?.id) {
         return (
@@ -597,6 +599,10 @@ export default async function LogicaPage() {
             </main>
         );
     }
+
+    const gameMode = dbUser.gameMode ?? "MANTRA";
+    const isClassic = gameMode === "CLASSIC";
+
 
     const team = await prisma.team.findUnique({
         where: { ownerId: dbUser.id },
@@ -776,7 +782,7 @@ export default async function LogicaPage() {
     const totalMatchdays = allMatchdays.length ? Math.max(...allMatchdays) : 0;
 
     const items = players.map((p) => {
-        const roles = splitRoles(p.roleMantra).map(normRole);
+        const roles = splitRoles(isClassic ? p.roleClassic : p.roleMantra).map(normRole);
 
         const stats: StatRow[] = (p.stats ?? []).map((s) => ({
             matchday: Number(s.matchday ?? 0),
@@ -823,11 +829,14 @@ export default async function LogicaPage() {
     const roleSet = new Set<string>();
     for (const it of items) for (const r of it.roles) if (r) roleSet.add(r);
 
+    const baseOrder = (isClassic ? CLASSIC_ORDER : MANTRA_ORDER) as readonly string[];
+
     const extraRoles = [...roleSet]
-        .filter((r) => !(MANTRA_ORDER as readonly string[]).includes(r))
+        .filter((r) => !baseOrder.includes(r))
         .sort((a, b) => a.localeCompare(b));
 
-    const rolesSorted = [...MANTRA_ORDER.filter((r) => roleSet.has(r)), ...extraRoles];
+    const rolesSorted = [...baseOrder.filter((r) => roleSet.has(r)), ...extraRoles];
+
 
     const computed = rolesSorted.map((role) => {
         const rows = items.filter((it) => it.roles.includes(role)).map((it) => it.row);
