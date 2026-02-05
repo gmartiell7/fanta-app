@@ -80,6 +80,7 @@ function splitBySep(line: string, sep: string) {
     return out;
 }
 
+// ✅ Fantacalcio.it: "Cod." è l’ID giocatore
 const ID_KEYS = ["#", "id", "cod", "codice", "codgiocatore", "idgiocatore", "idplayer", "playerid"];
 const VOTE_KEYS = ["voto", "v", "mv", "votostatistico", "votost", "votofg"];
 
@@ -132,6 +133,16 @@ function findHeaderAndDelimiter(text: string) {
     return null;
 }
 
+async function readResponseBody(res: Response) {
+    // prova JSON, altrimenti text
+    const text = await res.text().catch(() => "");
+    try {
+        return { kind: "json" as const, value: JSON.parse(text) };
+    } catch {
+        return { kind: "text" as const, value: text };
+    }
+}
+
 export default function AdminPage() {
     const { data: session, status } = useSession();
 
@@ -145,14 +156,23 @@ export default function AdminPage() {
     const role = (session?.user as UserWithRole | undefined)?.role;
     const isAdmin = Boolean((session?.user as UserWithRole | undefined)?.isAdmin) || role === "ADMIN";
 
-    if (status === "loading") return <p>Caricamento...</p>;
-    if (!session || !isAdmin) return <p>Accesso negato</p>;
+    // ✅ IMPORTANTISSIMO: niente return prima degli hook
+    const canAccess = status !== "loading" && !!session && isAdmin;
+
+    const loadedSet = useMemo(() => new Set(loadedDays), [loadedDays]);
 
     async function fetchLoadedDays() {
         setLoadingDays(true);
         try {
             const res = await fetch("/api/admin/matchdays/loaded", { cache: "no-store" });
-            const data = await res.json().catch(() => ({}));
+            const body = await readResponseBody(res);
+
+            if (!res.ok) {
+                console.error("loaded endpoint error:", res.status, body);
+                return;
+            }
+
+            const data = body.kind === "json" ? body.value : {};
             const arr = Array.isArray(data?.loaded) ? data.loaded : [];
             setLoadedDays(arr.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0));
         } finally {
@@ -161,10 +181,10 @@ export default function AdminPage() {
     }
 
     useEffect(() => {
+        if (!canAccess) return;
         fetchLoadedDays();
-    }, []);
-
-    const loadedSet = useMemo(() => new Set(loadedDays), [loadedDays]);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [canAccess]);
 
     async function uploadVotesCsv(f: File) {
         setUploading(true);
@@ -180,7 +200,7 @@ export default function AdminPage() {
 
             const { headerIndex, delimiter, lines } = found;
 
-            // scarta tutto prima dell’header (nel tuo CSV ci sono righe di testo + nome squadra)
+            // scarta tutto prima dell’header (nel CSV Fantacalcio.it c’è testo + nome squadra)
             const sliced = lines.slice(headerIndex).join("\n");
 
             const parsedRows = await new Promise<UploadRow[]>((resolve, reject) => {
@@ -219,7 +239,6 @@ export default function AdminPage() {
                                     ass: toInt(getFieldNorm(r, INT_KEYS.ass)) ?? 0,
                                 };
                             })
-                            // ✅ FIX: type-guard (così TS sa che non ci sono null)
                             .filter((x): x is UploadRow => x !== null);
 
                         if (!out.length) {
@@ -239,9 +258,18 @@ export default function AdminPage() {
                 body: JSON.stringify({ matchday, rows: parsedRows }),
             });
 
-            const data = await res.json().catch(() => ({}));
-            if (!res.ok) throw new Error(data?.error ?? "Upload fallito");
+            const body = await readResponseBody(res);
 
+            if (!res.ok) {
+                console.error("upload endpoint error:", res.status, body);
+                const msg =
+                    body.kind === "json"
+                        ? (body.value?.error ?? JSON.stringify(body.value))
+                        : (body.value || "Upload fallito");
+                throw new Error(`${res.status} ${res.statusText} - ${msg}`);
+            }
+
+            const data = body.kind === "json" ? body.value : {};
             alert(
                 `OK! Giornata ${matchday}\nRicevute: ${data.received}\nUpsert: ${data.upserted}\nSkipped: ${data.skipped}\nPlayersFound: ${data.playersFound}`
             );
@@ -253,6 +281,10 @@ export default function AdminPage() {
             setUploading(false);
         }
     }
+
+    // ✅ Render (qui possiamo fare return liberamente)
+    if (status === "loading") return <p>Caricamento...</p>;
+    if (!session || !isAdmin) return <p>Accesso negato</p>;
 
     return (
         <main className="p-6 space-y-4">
@@ -269,7 +301,11 @@ export default function AdminPage() {
                     title="Giornata"
                 />
 
-                <input type="file" accept=".csv,.txt" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+                <input
+                    type="file"
+                    accept=".csv,.txt"
+                    onChange={(e) => setFile(e.target.files?.[0] || null)}
+                />
 
                 <button
                     className="bg-black text-white px-4 py-2 rounded disabled:opacity-60"
@@ -297,7 +333,9 @@ export default function AdminPage() {
                                 key={day}
                                 className={[
                                     "rounded-md border px-2 py-1 text-center text-sm font-medium",
-                                    isLoaded ? "border-green-600 bg-green-100 text-green-800" : "border-gray-200 bg-white text-gray-500",
+                                    isLoaded
+                                        ? "border-green-600 bg-green-100 text-green-800"
+                                        : "border-gray-200 bg-white text-gray-500",
                                 ].join(" ")}
                                 title={isLoaded ? "Voti caricati" : "Non caricata"}
                             >
