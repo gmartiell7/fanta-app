@@ -81,7 +81,17 @@ function splitBySep(line: string, sep: string) {
 }
 
 // ✅ Fantacalcio.it: "Cod." è l’ID giocatore
-const ID_KEYS = ["#", "id", "cod", "codice", "codgiocatore", "idgiocatore", "idplayer", "playerid"];
+const ID_KEYS = [
+    "#",
+    "id",
+    "cod",
+    "cod.",
+    "codice",
+    "codgiocatore",
+    "idgiocatore",
+    "idplayer",
+    "playerid",
+];
 const VOTE_KEYS = ["voto", "v", "mv", "votostatistico", "votost", "votofg"];
 
 const INT_KEYS = {
@@ -106,7 +116,8 @@ function buildNormRow(r: CsvRow) {
 
 function getFieldNorm(r: Record<string, unknown>, keys: string[]) {
     for (const k of keys) {
-        const v = r[k];
+        const kk = normKey(k);
+        const v = r[kk];
         if (v !== undefined && v !== null && norm(v) !== "") return v;
     }
     return undefined;
@@ -123,9 +134,12 @@ function findHeaderAndDelimiter(text: string) {
         for (const sep of seps) {
             if (!raw.includes(sep)) continue;
 
-            const cols = splitBySep(raw, sep).map((c) => normKey(c)).filter(Boolean);
-            const hasId = cols.some((c) => ID_KEYS.includes(c));
-            const hasVote = cols.some((c) => VOTE_KEYS.includes(c));
+            const cols = splitBySep(raw, sep)
+                .map((c) => normKey(c))
+                .filter(Boolean);
+
+            const hasId = cols.some((c) => ID_KEYS.map(normKey).includes(c));
+            const hasVote = cols.some((c) => VOTE_KEYS.map(normKey).includes(c));
 
             if (hasId && hasVote) return { headerIndex: i, delimiter: sep, lines };
         }
@@ -134,7 +148,6 @@ function findHeaderAndDelimiter(text: string) {
 }
 
 async function readResponseBody(res: Response) {
-    // prova JSON, altrimenti text
     const text = await res.text().catch(() => "");
     try {
         return { kind: "json" as const, value: JSON.parse(text) };
@@ -174,7 +187,11 @@ export default function AdminPage() {
 
             const data = body.kind === "json" ? body.value : {};
             const arr = Array.isArray(data?.loaded) ? data.loaded : [];
-            setLoadedDays(arr.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0));
+            setLoadedDays(
+                arr
+                    .map((x: unknown) => Number(x))
+                    .filter((n: number) => Number.isFinite(n) && n > 0)
+            );
         } finally {
             setLoadingDays(false);
         }
@@ -214,6 +231,7 @@ export default function AdminPage() {
 
                         const out = rows
                             .map((raw): UploadRow | null => {
+                                // normalizza chiavi e valori
                                 const r = buildNormRow(raw);
 
                                 const extIdVal = getFieldNorm(r, ID_KEYS);
@@ -224,6 +242,7 @@ export default function AdminPage() {
                                 const voteRaw = voteRawVal != null ? String(voteRawVal) : null;
                                 const vote = toFloat(voteRawVal);
 
+                                // nota: alcune righe “squadra” o “separatore” potrebbero passare header parse ma senza id: le scartiamo sopra.
                                 return {
                                     playerExtId: extId,
                                     voteRaw,
@@ -262,11 +281,14 @@ export default function AdminPage() {
 
             if (!res.ok) {
                 console.error("upload endpoint error:", res.status, body);
-                const msg =
-                    body.kind === "json"
-                        ? (body.value?.error ?? JSON.stringify(body.value))
-                        : (body.value || "Upload fallito");
-                throw new Error(`${res.status} ${res.statusText} - ${msg}`);
+
+                if (body.kind === "json") {
+                    const err = body.value?.error ?? "Upload fallito";
+                    const details = body.value?.message ? `\nDettagli: ${body.value.message}` : "";
+                    throw new Error(`${res.status} ${res.statusText} - ${err}${details}`);
+                }
+
+                throw new Error(`${res.status} ${res.statusText} - ${body.value || "Upload fallito"}`);
             }
 
             const data = body.kind === "json" ? body.value : {};

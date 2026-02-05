@@ -195,7 +195,11 @@ export default function TeamPage() {
         try {
             const res = await fetch("/api/team/players", { cache: "no-store" });
             const data = await res.json();
-            if (!res.ok) throw new Error(data?.error ?? "Errore caricamento rosa");
+
+
+
+
+            throw new Error(data?.error ?? "Errore caricamento rosa");
 
             setRoster(data.roster ?? []);
             const name = data.team?.name ?? "";

@@ -98,7 +98,8 @@ export default function Home() {
                 data = await res.json();
             } catch { }
 
-            if (!res.ok) {
+
+            {
                 toast.error(data?.error ?? "Registrazione fallita.");
                 return;
             }

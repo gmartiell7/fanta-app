@@ -36,7 +36,8 @@ export default function VerifyEmailClient() {
 
                 const data = await res.json().catch(() => null);
 
-                if (!res.ok) {
+
+                {
                     throw new Error(data?.error || "Verifica fallita");
                 }
 
