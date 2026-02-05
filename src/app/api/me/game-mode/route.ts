@@ -18,42 +18,43 @@ async function getAuthedEmail(): Promise<string | null> {
 
 export async function GET() {
     const email = await getAuthedEmail();
-    if (!email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
     const user = await prisma.user.findUnique({
         where: { email },
         select: { gameMode: true },
     });
 
-    return NextResponse.json({ gameMode: user?.gameMode ?? GameMode.MANTRA });
+    return NextResponse.json({ ok: true, gameMode: user?.gameMode ?? GameMode.MANTRA });
 }
 
 export async function POST(req: Request) {
     const email = await getAuthedEmail();
-    if (!email) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    if (!email) return NextResponse.json({ ok: false, error: "Unauthorized" }, { status: 401 });
 
     const body = (await req.json().catch(() => null)) as { gameMode?: unknown } | null;
-    const gameMode = normalizeGameMode(body?.gameMode);
+    const nextMode = normalizeGameMode(body?.gameMode);
 
-    if (!gameMode) {
-        return NextResponse.json({ error: "Invalid gameMode" }, { status: 400 });
+    if (!nextMode) {
+        return NextResponse.json({ ok: false, error: "Invalid gameMode" }, { status: 400 });
     }
 
-    // evito update se non serve
     const current = await prisma.user.findUnique({
         where: { email },
         select: { gameMode: true },
     });
 
-    if ((current?.gameMode ?? GameMode.MANTRA) === gameMode) {
-        return NextResponse.json({ gameMode });
+    const previous = current?.gameMode ?? GameMode.MANTRA;
+
+    if (previous === nextMode) {
+        return NextResponse.json({ ok: true, gameMode: nextMode, previous });
     }
 
     const updated = await prisma.user.update({
         where: { email },
-        data: { gameMode },
+        data: { gameMode: nextMode },
         select: { gameMode: true },
     });
 
-    return NextResponse.json({ gameMode: updated.gameMode });
+    return NextResponse.json({ ok: true, gameMode: updated.gameMode, previous });
 }

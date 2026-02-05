@@ -8,6 +8,13 @@ function toInt(v: string | null, def: number) {
     return Number.isFinite(n) && n > 0 ? Math.trunc(n) : def;
 }
 
+type Mode = "MANTRA" | "CLASSIC";
+
+function normalizeMode(v: string | null): Mode {
+    const s = String(v ?? "").trim().toUpperCase();
+    return s === "CLASSIC" ? "CLASSIC" : "MANTRA";
+}
+
 export async function GET(req: Request) {
     // opzionale: se vuoi bloccare il mercato ai loggati
     const session = await getServerSession(authOptions);
@@ -21,21 +28,29 @@ export async function GET(req: Request) {
     const pageSizeRaw = toInt(searchParams.get("pageSize"), 20);
     const pageSize = Math.min(100, Math.max(10, pageSizeRaw));
 
+    const mode = normalizeMode(searchParams.get("mode"));
     const role = (searchParams.get("role") ?? "").trim();
     const q = (searchParams.get("q") ?? "").trim();
 
     // ✅ where dinamico
+    // role: su roleMantra o roleClassic in base alla modalità
     const where: {
         roleMantra?: { contains: string; mode: "insensitive" };
+        roleClassic?: { equals: string; mode: "insensitive" };
         OR?: Array<
             | { name: { contains: string; mode: "insensitive" } }
             | { team: { contains: string; mode: "insensitive" } }
         >;
     } = {};
 
-    // ruolo base: match “Por” dentro "Por;Dc" ecc.
     if (role) {
-        where.roleMantra = { contains: role, mode: "insensitive" };
+        if (mode === "CLASSIC") {
+            // Classic: match esatto ("P","D","C","A")
+            where.roleClassic = { equals: role, mode: "insensitive" };
+        } else {
+            // Mantra: match “Por” dentro "Por/Dc" ecc.
+            where.roleMantra = { contains: role, mode: "insensitive" };
+        }
     }
 
     if (q) {
@@ -70,6 +85,7 @@ export async function GET(req: Request) {
     const totalPages = Math.max(1, Math.ceil(total / pageSize));
 
     return NextResponse.json({
+        mode,
         page,
         pageSize,
         total,

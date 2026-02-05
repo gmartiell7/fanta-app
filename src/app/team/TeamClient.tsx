@@ -48,24 +48,30 @@ type RosterItem = {
     player: Player;
 };
 
-function splitRoles(roleMantra: string) {
-    return String(roleMantra ?? "")
+type GameMode = "MANTRA" | "CLASSIC";
+
+function normalizeGameMode(v: unknown): GameMode {
+    const s = String(v ?? "").trim().toUpperCase();
+    return s === "CLASSIC" ? "CLASSIC" : "MANTRA";
+}
+
+function getPlayerRole(p: Player, mode: GameMode) {
+    if (mode === "CLASSIC") return (p.roleClassic ?? "").trim();
+    return (p.roleMantra ?? "").trim();
+}
+
+function splitRolesByMode(role: string, mode: GameMode) {
+    if (mode === "CLASSIC") return role ? [role] : [];
+    return String(role ?? "")
         .split(/[\/;]+/)
         .map((s) => s.trim())
         .filter(Boolean);
 }
 
-function hasRole(roleMantra: string, baseRole: string) {
-    return splitRoles(roleMantra).includes(baseRole);
+function hasBaseRole(p: Player, baseRole: string, mode: GameMode) {
+    const r = getPlayerRole(p, mode);
+    return splitRolesByMode(r, mode).includes(baseRole);
 }
-
-const ROLE_ROWS = [
-    ["Por"],
-    ["Dd", "Dc", "Ds", "B", "M", "E"],
-    ["C", "T", "W", "A", "Pc"],
-] as const;
-
-const ALL_ROLES_ORDERED = ROLE_ROWS.flat() as unknown as string[];
 
 function rosterItemsFromPlayers(players: Player[]): RosterItem[] {
     // id di TeamPlayer non ce l’abbiamo in optimistic -> ne mettiamo uno finto
@@ -76,6 +82,9 @@ function rosterItemsFromPlayers(players: Player[]): RosterItem[] {
 export default function TeamPage() {
     const router = useRouter();
     const sp = useSearchParams();
+
+    const [gameMode, setGameMode] = useState<GameMode>("MANTRA");
+    const isClassic = gameMode === "CLASSIC";
 
     const [rosterTab, setRosterTab] = useState<string>("ALL");
 
@@ -111,21 +120,37 @@ export default function TeamPage() {
         [rosterPlayers]
     );
 
+    const ROLE_ROWS = useMemo(() => {
+        return isClassic
+            ? ([["P"], ["D"], ["C"], ["A"]] as const)
+            : ([["Por"], ["Dd", "Dc", "Ds", "B", "M", "E"], ["C", "T", "W", "A", "Pc"]] as const);
+    }, [isClassic]);
+
+    const ALL_ROLES_ORDERED = useMemo(
+        () => ROLE_ROWS.flat() as unknown as string[],
+        [ROLE_ROWS]
+    );
+
+    const gkRole = isClassic ? "P" : "Por";
+
     const porInRoster = useMemo(
-        () => rosterPlayers.filter((p) => hasRole(p.roleMantra, "Por")).length,
-        [rosterPlayers]
+        () => rosterPlayers.filter((p) => hasBaseRole(p, gkRole, gameMode)).length,
+        [rosterPlayers, gkRole, gameMode]
     );
 
     const rosterAllSorted = useMemo(() => {
         const roleIndex = new Map<string, number>();
         ALL_ROLES_ORDERED.forEach((r, i) => roleIndex.set(r, i));
 
-        const getPrimaryRole = (roleMantra: string) => splitRoles(roleMantra)[0] ?? "";
+        const getPrimaryRole = (p: Player) => {
+            const r = getPlayerRole(p, gameMode);
+            return splitRolesByMode(r, gameMode)[0] ?? "";
+        };
 
         const list = [...rosterPlayers];
         list.sort((a, b) => {
-            const ra = getPrimaryRole(a.roleMantra);
-            const rb = getPrimaryRole(b.roleMantra);
+            const ra = getPrimaryRole(a);
+            const rb = getPrimaryRole(b);
 
             const ia = roleIndex.get(ra) ?? 999;
             const ib = roleIndex.get(rb) ?? 999;
@@ -135,14 +160,15 @@ export default function TeamPage() {
         });
 
         return list;
-    }, [rosterPlayers]);
+    }, [rosterPlayers, ALL_ROLES_ORDERED, gameMode]);
 
     const rosterByBaseRole = useMemo(() => {
         const map = new Map<string, Player[]>();
         const seenPerRole = new Map<string, Set<number>>();
 
         for (const p of rosterPlayers) {
-            for (const base of splitRoles(p.roleMantra)) {
+            const r = getPlayerRole(p, gameMode);
+            for (const base of splitRolesByMode(r, gameMode)) {
                 if (!map.has(base)) map.set(base, []);
                 if (!seenPerRole.has(base)) seenPerRole.set(base, new Set());
 
@@ -161,9 +187,12 @@ export default function TeamPage() {
         }
 
         return map;
-    }, [rosterPlayers]);
+    }, [rosterPlayers, gameMode]);
 
     const tabRoles = useMemo(() => {
+        // in Classic vogliamo SOLO P D C A in quel ordine
+        if (isClassic) return ["P", "D", "C", "A"];
+
         const base = (
             availableRoles?.length ? availableRoles : Array.from(rosterByBaseRole.keys())
         ).filter(Boolean);
@@ -173,7 +202,7 @@ export default function TeamPage() {
             .sort((a, b) => a.localeCompare(b));
 
         return [...ALL_ROLES_ORDERED, ...extras];
-    }, [availableRoles, rosterByBaseRole]);
+    }, [isClassic, availableRoles, rosterByBaseRole, ALL_ROLES_ORDERED]);
 
     const realTeamCounts = useMemo(() => {
         const m = new Map<string, number>();
@@ -185,10 +214,23 @@ export default function TeamPage() {
         const params = new URLSearchParams();
         params.set("page", String(page));
         params.set("pageSize", String(pageSize));
+        params.set("mode", gameMode);
         if (role) params.set("role", role);
         if (search.trim()) params.set("q", search.trim());
         return `?${params.toString()}`;
-    }, [page, pageSize, role, search]);
+    }, [page, pageSize, role, search, gameMode]);
+
+    async function loadGameMode() {
+        try {
+            const res = await fetch("/api/me/game-mode", { cache: "no-store" });
+            const data = await res.json();
+            if (res.ok) {
+                setGameMode(normalizeGameMode(data?.gameMode));
+            }
+        } catch {
+            // ignore -> default MANTRA
+        }
+    }
 
     async function loadRoster() {
         setLoadingRoster(true);
@@ -211,10 +253,9 @@ export default function TeamPage() {
         }
     }
 
-
-    async function loadRoles() {
+    async function loadRoles(mode: GameMode) {
         try {
-            const res = await fetch("/api/player-roles", { cache: "no-store" });
+            const res = await fetch(`/api/player-roles?mode=${mode}`, { cache: "no-store" });
             const data = await res.json();
             if (!res.ok) return;
             setAvailableRoles(data.roles ?? []);
@@ -248,7 +289,6 @@ export default function TeamPage() {
             setPlayers([]);
             setPlayersTotalPages(1);
         } finally {
-            // se è stato abortito, può essere che finally parta comunque: controlliamo
             if (!ac.signal.aborted) setLoadingPlayers(false);
         }
     }
@@ -288,11 +328,20 @@ export default function TeamPage() {
         };
     }, [role, search, page, pageSize, router]);
 
+    // init
     useEffect(() => {
+        loadGameMode();
         loadRoster();
-        loadRoles();
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
+
+    // quando cambia gameMode: reset filtri ruolo + tab + ricarica ruoli
+    useEffect(() => {
+        setRosterTab("ALL");
+        setRole(""); // evita ruolo non valido (es: "Por" quando passi a Classic)
+        loadRoles(gameMode);
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [gameMode]);
 
     useEffect(() => {
         loadPlayers();
@@ -329,7 +378,6 @@ export default function TeamPage() {
             setEditingTeamName(false);
             toast.success("Nome squadra salvato");
 
-            // qui ricarico SOLO per sicurezza di consistenza team + roster
             await loadRoster();
         } catch (e: any) {
             toast.error(e?.message ?? "Errore salvataggio");
@@ -356,14 +404,15 @@ export default function TeamPage() {
 
         if (busyByExtId[extId]) return;
 
-        // guardie veloci UI
         if (rosterPlayerExtIds.has(extId)) return;
         const p = players.find((x) => Number(x.extId) === extId);
         if (!p) {
             toast.error("Giocatore non trovato nella pagina corrente");
             return;
         }
-        if (hasRole(p.roleMantra, "Por") && porInRoster >= 3) {
+
+        // limite portieri, coerente con modalità
+        if (hasBaseRole(p, gkRole, gameMode) && porInRoster >= 3) {
             toast.error("Max 3 portieri");
             return;
         }
@@ -380,11 +429,9 @@ export default function TeamPage() {
             const data = await res.json();
             if (!res.ok) throw new Error(data?.error ?? "Errore aggiunta");
 
-            // 🔥 backend ritorna roster aggiornato: lo usiamo, niente loadRoster()
             setRoster(data.roster ?? []);
             toast.success("Aggiunto in rosa");
         } catch (e: any) {
-            // rollback
             optimisticRemove(extId);
             toast.error(e?.message ?? "Errore aggiunta");
         } finally {
@@ -398,7 +445,6 @@ export default function TeamPage() {
 
         if (busyByExtId[extId]) return;
 
-        // snapshot per rollback
         const snapshot = roster;
 
         setBusy(extId, true);
@@ -416,16 +462,18 @@ export default function TeamPage() {
             setRoster(data.roster ?? []);
             toast.success("Rimosso dalla rosa");
         } catch (e: any) {
-            setRoster(snapshot); // rollback
+            setRoster(snapshot);
             toast.error(e?.message ?? "Errore rimozione");
         } finally {
             setBusy(extId, false);
         }
     }
 
+    const modeLabel = isClassic ? "Classic" : "Mantra";
+
     return (
         <div className="mx-auto w-full max-w-none p-6">
-    {/* Header */}
+            {/* Header */}
             <div className="mb-4 flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="space-y-2">
                     <h1 className="text-2xl font-extrabold tracking-tight">La mia squadra</h1>
@@ -442,6 +490,10 @@ export default function TeamPage() {
                                 <Pencil className="h-4 w-4" />
                                 Modifica
                             </Button>
+
+                            <Badge variant="outline" className="ml-2">
+                                Modalità: {modeLabel}
+                            </Badge>
                         </div>
                     ) : (
                         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
@@ -468,11 +520,17 @@ export default function TeamPage() {
                         </div>
                     )}
 
-                    <p className="text-sm text-muted-foreground">Mantra style: movimento libero • Portieri max 3</p>
+                    <p className="text-sm text-muted-foreground">
+                        {isClassic
+                            ? "Classic: ruoli P/D/C/A • Portieri max 3"
+                            : "Mantra style: movimento libero • Portieri max 3"}
+                    </p>
                 </div>
 
                 <div className="flex items-center gap-3">
-                    <Badge variant={porInRoster >= 3 ? "destructive" : "secondary"}>Por {porInRoster}/3</Badge>
+                    <Badge variant={porInRoster >= 3 ? "destructive" : "secondary"}>
+                        {gkRole} {porInRoster}/3
+                    </Badge>
 
                     {porInRoster >= 3 && (
                         <div className="flex items-center gap-1 text-sm text-destructive">
@@ -481,7 +539,12 @@ export default function TeamPage() {
                         </div>
                     )}
 
-                    <Button variant="outline" size="sm" onClick={() => signOut({ callbackUrl: "/login" })} className="gap-2">
+                    <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => signOut({ callbackUrl: "/login" })}
+                        className="gap-2"
+                    >
                         <LogOut className="h-4 w-4" />
                         Logout
                     </Button>
@@ -489,7 +552,7 @@ export default function TeamPage() {
             </div>
 
             <div className="grid grid-cols-1 gap-4 xl:grid-cols-[1.4fr_1fr]">
-    {/* ROSA */}
+                {/* ROSA */}
                 <Card className="rounded-2xl">
                     <CardHeader>
                         <CardTitle className="flex items-center justify-between">
@@ -509,18 +572,29 @@ export default function TeamPage() {
                             <div className="text-sm text-muted-foreground">Nessun giocatore in rosa.</div>
                         ) : (
                             <div className="space-y-4">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                            <Badge variant="outline">Totale: {roster.length}</Badge>
-                                            <Badge variant={porInRoster >= 3 ? "destructive" : "secondary"}>Por {porInRoster}/3</Badge>
-                                        </div>
+                                <div className="flex flex-wrap items-center gap-2">
+                                    <Badge variant="outline">Totale: {roster.length}</Badge>
+                                    <Badge variant={porInRoster >= 3 ? "destructive" : "secondary"}>
+                                        {gkRole} {porInRoster}/3
+                                    </Badge>
+                                </div>
+
                                 <Tabs value={rosterTab} onValueChange={setRosterTab} className="w-full">
                                     <TabsList className="flex h-auto w-full flex-col items-center gap-3 bg-transparent p-0">
                                         {ROLE_ROWS.map((row, idx) => (
                                             <div
                                                 key={idx}
-                                                className={["flex w-full justify-center", idx === 1 ? "overflow-x-auto" : ""].join(" ")}
+                                                className={[
+                                                    "flex w-full justify-center",
+                                                    idx === 1 && !isClassic ? "overflow-x-auto" : "",
+                                                ].join(" ")}
                                             >
-                                                <div className={["flex justify-center gap-2", idx === 1 ? "flex-nowrap" : "flex-wrap"].join(" ")}>
+                                                <div
+                                                    className={[
+                                                        "flex justify-center gap-2",
+                                                        idx === 1 && !isClassic ? "flex-nowrap" : "flex-wrap",
+                                                    ].join(" ")}
+                                                >
                                                     {row.map((r) => {
                                                         const count = rosterByBaseRole.get(r)?.length ?? 0;
                                                         return (
@@ -546,7 +620,7 @@ export default function TeamPage() {
                                             <TableHeader>
                                                 <TableRow>
                                                     <TableHead>Nome</TableHead>
-                                                    <TableHead>Ruoli</TableHead>
+                                                    <TableHead>Ruolo</TableHead>
                                                     <TableHead>Squadra</TableHead>
                                                     <TableHead>PG</TableHead>
                                                     <TableHead>Mv</TableHead>
@@ -555,37 +629,44 @@ export default function TeamPage() {
                                                 </TableRow>
                                             </TableHeader>
                                             <TableBody>
-                                                {rosterAllSorted.map((p) => (
-                                                    <TableRow key={p.extId}>
-                                                        <TableCell className="font-medium">{p.name}</TableCell>
-                                                        <TableCell className="whitespace-nowrap">
-                                                            <Badge
-                                                                variant="secondary"
-                                                                className="max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap"
-                                                                title={p.roleMantra}
-                                                            >
-                                                                {p.roleMantra}
-                                                            </Badge>
-                                                        </TableCell>
-                                                        <TableCell>
-                                                            <Badge variant="outline">{p.team}</Badge>
-                                                        </TableCell>
-                                                        <TableCell className="text-right">{p.pg ?? 0}</TableCell>
-                                                        <TableCell className="text-right">{p.mv == null ? "-" : p.mv.toFixed(2)}</TableCell>
-                                                        <TableCell className="text-right">{p.fmv == null ? "-" : p.fmv.toFixed(2)}</TableCell>
-                                                        <TableCell className="text-right">
-                                                            <Button
-                                                                variant="ghost"
-                                                                size="icon"
-                                                                onClick={() => removeFromRoster(p.extId)}
-                                                                disabled={!!busyByExtId[p.extId]}
-                                                                aria-label="Rimuovi"
-                                                            >
-                                                                <Trash2 className="h-4 w-4" />
-                                                            </Button>
-                                                        </TableCell>
-                                                    </TableRow>
-                                                ))}
+                                                {rosterAllSorted.map((p) => {
+                                                    const shownRole = isClassic ? (p.roleClassic ?? "-") : p.roleMantra;
+                                                    return (
+                                                        <TableRow key={p.extId}>
+                                                            <TableCell className="font-medium">{p.name}</TableCell>
+                                                            <TableCell className="whitespace-nowrap">
+                                                                <Badge
+                                                                    variant="secondary"
+                                                                    className="max-w-[140px] overflow-hidden text-ellipsis whitespace-nowrap"
+                                                                    title={shownRole}
+                                                                >
+                                                                    {shownRole}
+                                                                </Badge>
+                                                            </TableCell>
+                                                            <TableCell>
+                                                                <Badge variant="outline">{p.team}</Badge>
+                                                            </TableCell>
+                                                            <TableCell className="text-right">{p.pg ?? 0}</TableCell>
+                                                            <TableCell className="text-right">
+                                                                {p.mv == null ? "-" : p.mv.toFixed(2)}
+                                                            </TableCell>
+                                                            <TableCell className="text-right">
+                                                                {p.fmv == null ? "-" : p.fmv.toFixed(2)}
+                                                            </TableCell>
+                                                            <TableCell className="text-right">
+                                                                <Button
+                                                                    variant="ghost"
+                                                                    size="icon"
+                                                                    onClick={() => removeFromRoster(p.extId)}
+                                                                    disabled={!!busyByExtId[p.extId]}
+                                                                    aria-label="Rimuovi"
+                                                                >
+                                                                    <Trash2 className="h-4 w-4" />
+                                                                </Button>
+                                                            </TableCell>
+                                                        </TableRow>
+                                                    );
+                                                })}
                                             </TableBody>
                                         </Table>
                                     </TabsContent>
@@ -596,14 +677,15 @@ export default function TeamPage() {
                                             <TabsContent key={r} value={r} className="mt-4">
                                                 {list.length === 0 ? (
                                                     <div className="text-sm text-muted-foreground">
-                                                        Nessun giocatore per il ruolo <span className="font-semibold text-foreground">{r}</span>.
+                                                        Nessun giocatore per il ruolo{" "}
+                                                        <span className="font-semibold text-foreground">{r}</span>.
                                                     </div>
                                                 ) : (
                                                     <Table>
                                                         <TableHeader>
                                                             <TableRow>
                                                                 <TableHead>Nome</TableHead>
-                                                                <TableHead>Ruoli</TableHead>
+                                                                <TableHead>Ruolo</TableHead>
                                                                 <TableHead>Squadra</TableHead>
                                                                 <TableHead>PG</TableHead>
                                                                 <TableHead>Mv</TableHead>
@@ -612,31 +694,38 @@ export default function TeamPage() {
                                                             </TableRow>
                                                         </TableHeader>
                                                         <TableBody>
-                                                            {list.map((p) => (
-                                                                <TableRow key={p.extId}>
-                                                                    <TableCell className="font-medium">{p.name}</TableCell>
-                                                                    <TableCell>
-                                                                        <Badge variant="secondary">{p.roleMantra}</Badge>
-                                                                    </TableCell>
-                                                                    <TableCell>
-                                                                        <Badge variant="outline">{p.team}</Badge>
-                                                                    </TableCell>
-                                                                    <TableCell className="text-right">{p.pg ?? 0}</TableCell>
-                                                                    <TableCell className="text-right">{p.mv == null ? "-" : p.mv.toFixed(2)}</TableCell>
-                                                                    <TableCell className="text-right">{p.fmv == null ? "-" : p.fmv.toFixed(2)}</TableCell>
-                                                                    <TableCell className="text-right">
-                                                                        <Button
-                                                                            variant="ghost"
-                                                                            size="icon"
-                                                                            onClick={() => removeFromRoster(p.extId)}
-                                                                            disabled={!!busyByExtId[p.extId]}
-                                                                            aria-label="Rimuovi"
-                                                                        >
-                                                                            <Trash2 className="h-4 w-4" />
-                                                                        </Button>
-                                                                    </TableCell>
-                                                                </TableRow>
-                                                            ))}
+                                                            {list.map((p) => {
+                                                                const shownRole = isClassic ? (p.roleClassic ?? "-") : p.roleMantra;
+                                                                return (
+                                                                    <TableRow key={p.extId}>
+                                                                        <TableCell className="font-medium">{p.name}</TableCell>
+                                                                        <TableCell>
+                                                                            <Badge variant="secondary">{shownRole}</Badge>
+                                                                        </TableCell>
+                                                                        <TableCell>
+                                                                            <Badge variant="outline">{p.team}</Badge>
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right">{p.pg ?? 0}</TableCell>
+                                                                        <TableCell className="text-right">
+                                                                            {p.mv == null ? "-" : p.mv.toFixed(2)}
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right">
+                                                                            {p.fmv == null ? "-" : p.fmv.toFixed(2)}
+                                                                        </TableCell>
+                                                                        <TableCell className="text-right">
+                                                                            <Button
+                                                                                variant="ghost"
+                                                                                size="icon"
+                                                                                onClick={() => removeFromRoster(p.extId)}
+                                                                                disabled={!!busyByExtId[p.extId]}
+                                                                                aria-label="Rimuovi"
+                                                                            >
+                                                                                <Trash2 className="h-4 w-4" />
+                                                                            </Button>
+                                                                        </TableCell>
+                                                                    </TableRow>
+                                                                );
+                                                            })}
                                                         </TableBody>
                                                     </Table>
                                                 )}
@@ -707,11 +796,16 @@ export default function TeamPage() {
 
                         <div className="mb-3 flex items-center justify-between">
                             <div className="flex items-center gap-2">
-                                <Button variant="outline" onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page <= 1}>
+                                <Button
+                                    variant="outline"
+                                    onClick={() => setPage((p) => Math.max(1, p - 1))}
+                                    disabled={page <= 1}
+                                >
                                     Prev
                                 </Button>
                                 <div className="text-sm text-muted-foreground">
-                                    Pagina <span className="font-semibold text-foreground">{page}</span> / {playersTotalPages}
+                                    Pagina <span className="font-semibold text-foreground">{page}</span> /{" "}
+                                    {playersTotalPages}
                                 </div>
                                 <Button
                                     variant="outline"
@@ -759,17 +853,19 @@ export default function TeamPage() {
                                         const extId = Number(p.extId);
                                         const already = rosterPlayerExtIds.has(extId);
 
-                                        const isPor = hasRole(p.roleMantra, "Por");
-                                        const porLimitReached = isPor && porInRoster >= 3;
+                                        const shownRole = isClassic ? (p.roleClassic ?? "-") : p.roleMantra;
+
+                                        const isGK = hasBaseRole(p, gkRole, gameMode);
+                                        const gkLimitReached = isGK && porInRoster >= 3;
 
                                         const busy = !!busyByExtId[extId];
-                                        const disabled = already || porLimitReached || busy;
+                                        const disabled = already || gkLimitReached || busy;
 
                                         return (
                                             <TableRow key={p.extId} className={already ? "opacity-70" : ""}>
                                                 <TableCell className="font-medium">{p.name}</TableCell>
                                                 <TableCell>
-                                                    <Badge variant="secondary">{p.roleMantra}</Badge>
+                                                    <Badge variant="secondary">{shownRole}</Badge>
                                                 </TableCell>
                                                 <TableCell>
                                                     <Badge variant="outline">{p.team}</Badge>
@@ -782,7 +878,13 @@ export default function TeamPage() {
                                                         onClick={() => addToRoster(extId)}
                                                     >
                                                         <Plus className="mr-2 h-4 w-4" />
-                                                        {already ? "In rosa" : porLimitReached ? "Max 3 Por" : busy ? "..." : "Aggiungi"}
+                                                        {already
+                                                            ? "In rosa"
+                                                            : gkLimitReached
+                                                                ? "Max 3 P"
+                                                                : busy
+                                                                    ? "..."
+                                                                    : "Aggiungi"}
                                                     </Button>
                                                 </TableCell>
                                             </TableRow>

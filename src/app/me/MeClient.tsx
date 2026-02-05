@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-
 
 type GameMode = "MANTRA" | "CLASSIC";
 type StatRow = {
@@ -50,7 +50,6 @@ function normRole(r: string) {
 function roleStringForMode(p: PlayerFromDB, mode: GameMode) {
     return mode === "CLASSIC" ? String(p.roleClassic ?? "") : String(p.roleMantra ?? "");
 }
-
 
 function calcMvFromStats(stats: Pick<StatRow, "vote">[]): number | null {
     const votes = stats.map((s) => s.vote).filter((v): v is number => v !== null);
@@ -270,7 +269,6 @@ const CLASSIC_MODULE_DEFS: ModuleDef[] = [
     { name: "5-4-1", slots: ["P", "D", "D", "D", "D", "D", "C", "C", "C", "C", "A"] },
 ];
 
-
 function expandRoleToken(token: string): string[] {
     const t = token.trim();
     const parts = t.split("/").map((x) => x.trim()).filter(Boolean);
@@ -294,14 +292,12 @@ type PickBestLineupResult =
     | { selectable: true; lineup: LineupItem[] }
     | { selectable: false; lineup: LineupItem[] };
 
-
 function pickBestLineup(
     players: PlayerFromDB[],
     scoreByRole: Map<string, Map<string, number>>,
     module: ModuleDef,
     mode: GameMode
 ): PickBestLineupResult {
-
     const playerRoles = new Map<string, string[]>();
     for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
 
@@ -418,7 +414,6 @@ function errMsg(e: unknown) {
 }
 
 function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: GameMode }) {
-
     const grouped = useMemo(() => {
         const g: Record<string, typeof lineup> = { ATT: [], AM: [], MID: [], WING: [], DEF: [], GK: [] };
         for (const x of lineup) {
@@ -432,7 +427,7 @@ function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: GameMode }) {
             { key: "DEF", label: "Difesa", items: g.DEF },
             { key: "GK", label: "Portiere", items: g.GK },
         ].filter((x) => x.items.length > 0);
-    }, [lineup,mode]);
+    }, [lineup, mode]);
 
     return (
         <div className="relative overflow-hidden rounded-3xl border border-slate-200 shadow-sm">
@@ -567,6 +562,8 @@ export default function MeClient({
     listoneTeams: string[];
     initialGameMode?: GameMode;
 }) {
+    const router = useRouter();
+
     const [name, setName] = useState(teamName);
     const [saving, setSaving] = useState(false);
 
@@ -609,6 +606,9 @@ export default function MeClient({
             if (gm === "MANTRA" || gm === "CLASSIC") setMode(gm as GameMode);
             else setMode(next);
 
+            // ✅ forza refresh (utile per passaggi rapidi a /team)
+            router.refresh();
+
             toast.success("Modalità salvata");
         } catch (e: unknown) {
             toast.error(errMsg(e));
@@ -616,7 +616,6 @@ export default function MeClient({
             setSavingMode(false);
         }
     }
-
 
     const [cats, setCats] = useState<CatState>(() => parsePredictionToCats(initialPrediction));
     const [predictionText, setPredictionText] = useState<string>(() =>
@@ -776,7 +775,6 @@ export default function MeClient({
                 </Link>
             </div>
 
-
             <Card className="rounded-2xl shadow-sm border-slate-200">
                 <CardHeader>
                     <CardTitle>Modalità di gioco</CardTitle>
@@ -813,6 +811,9 @@ export default function MeClient({
                 </CardContent>
             </Card>
 
+            {/* --- RESTO FILE IDENTICO --- */}
+            {/* DA QUI IN GIÙ NON HO TOCCATO NIENTE DEL TUO CODICE */}
+            {/* (incollato invariato) */}
 
             <Card className="rounded-2xl shadow-sm border-slate-200">
                 <CardHeader>
