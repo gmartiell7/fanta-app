@@ -26,7 +26,7 @@ type UploadRow = {
 };
 
 function norm(v: unknown) {
-    return String(v ?? "").trim();
+    return String(v ?? "").replace(/\uFEFF/g, "").trim();
 }
 
 function toInt(v: unknown): number | null {
@@ -43,35 +43,116 @@ function toFloat(v: unknown): number | null {
     return Number.isFinite(n) ? n : null;
 }
 
-function getField(r: CsvRow, keys: string[]) {
+function normKey(k: string) {
+    return norm(k)
+        .toLowerCase()
+        .replace(/[’'`.]/g, "")
+        .replace(/\s+/g, "")
+        .replace(/[^a-z0-9#]/g, "");
+}
+
+/** split semplice (non perfetto come CSV parser, ma basta per trovare header + delimiter) */
+function splitBySep(line: string, sep: string) {
+    const out: string[] = [];
+    let cur = "";
+    let inQuotes = false;
+
+    for (let i = 0; i < line.length; i++) {
+        const ch = line[i];
+
+        if (ch === '"') {
+            if (inQuotes && line[i + 1] === '"') {
+                cur += '"';
+                i++;
+            } else {
+                inQuotes = !inQuotes;
+            }
+            continue;
+        }
+
+        if (ch === sep && !inQuotes) {
+            out.push(cur);
+            cur = "";
+            continue;
+        }
+        cur += ch;
+    }
+    out.push(cur);
+    return out;
+}
+
+const ID_KEYS = [
+    "#",
+    "id",
+    "cod",
+    "codice",
+    "idgiocatore",
+    "idplayer",
+    "playerid",
+    "codgiocatore",
+];
+
+const VOTE_KEYS = [
+    "voto",
+    "v",
+    "mv",
+    "votostatistico",
+    "votost",
+    "votofg",
+    "votogazzetta",
+    "votopagella",
+];
+
+const INT_KEYS = {
+    gf: ["gf", "golfatti", "gol"],
+    gs: ["gs", "golsubiti"],
+    rp: ["rp", "rigoriparati"],
+    rs: ["rs", "rigorisbagliati"],
+    rf: ["rf", "rigorifatti"],
+    au: ["au", "autogol"],
+    amm: ["amm", "ammonizioni"],
+    esp: ["esp", "espulsioni"],
+    ass: ["ass", "assist"],
+};
+
+function buildNormRow(r: CsvRow) {
+    const m: Record<string, unknown> = {};
+    for (const k of Object.keys(r)) {
+        m[normKey(k)] = r[k];
+    }
+    return m;
+}
+
+function getFieldNorm(r: Record<string, unknown>, keys: string[]) {
     for (const k of keys) {
-        const val = r[k];
-        if (val !== undefined && val !== null && String(val).trim() !== "") return val;
+        const v = r[k];
+        if (v !== undefined && v !== null && norm(v) !== "") return v;
     }
     return undefined;
 }
 
-// prova più varianti (Fantacalcio.it cambia spesso intestazioni)
-function findMatchdayFromCsv(rows: CsvRow[]): number | null {
-    if (!rows.length) return null;
+/** trova la riga header e il separatore più plausibile */
+function findHeaderAndDelimiter(text: string) {
+    const lines = text.split(/\r?\n/).map((l) => l.replace(/\r/g, ""));
+    const seps = [";", ",", "\t"];
 
-    // 1) se c'è una colonna "G" / "Giornata" per riga, prendo il valore più frequente
-    const gVals: number[] = [];
-    for (const r of rows) {
-        const g = toInt(getField(r, ["G", "Giornata", "GG", "Matchday", "GIORNATA"]));
-        if (g && g >= 1 && g <= 60) gVals.push(g);
-    }
-    if (gVals.length) {
-        const freq = new Map<number, number>();
-        for (const g of gVals) freq.set(g, (freq.get(g) ?? 0) + 1);
-        let best: { g: number; c: number } | null = null;
-        for (const [g, c] of freq.entries()) {
-            if (!best || c > best.c) best = { g, c };
+    for (let i = 0; i < lines.length; i++) {
+        const raw = lines[i];
+        if (!raw || raw.trim().length === 0) continue;
+
+        for (const sep of seps) {
+            if (!raw.includes(sep)) continue;
+
+            const cols = splitBySep(raw, sep).map((c) => normKey(c)).filter(Boolean);
+            const hasId = cols.some((c) => ID_KEYS.includes(c));
+            const hasVote = cols.some((c) => VOTE_KEYS.includes(c));
+
+            if (hasId && hasVote) {
+                return { headerIndex: i, delimiter: sep, lines };
+            }
         }
-        if (best) return best.g;
     }
 
-    // 2) fallback: niente
     return null;
 }
 
@@ -85,7 +166,6 @@ export default function AdminPage() {
     const [loadingDays, setLoadingDays] = useState(false);
     const [uploading, setUploading] = useState(false);
 
-    // ✅ admin check più robusto (supporta sia role che isAdmin)
     const role = (session?.user as UserWithRole | undefined)?.role;
     const isAdmin = Boolean((session?.user as UserWithRole | undefined)?.isAdmin) || role === "ADMIN";
 
@@ -97,7 +177,6 @@ export default function AdminPage() {
         try {
             const res = await fetch("/api/admin/matchdays/loaded", { cache: "no-store" });
             const data = await res.json().catch(() => ({}));
-            // attendo { loaded: number[] } — se l'API manda altro, non rompo la UI
             const arr = Array.isArray(data?.loaded) ? data.loaded : [];
             setLoadedDays(arr.map((x: any) => Number(x)).filter((n: number) => Number.isFinite(n) && n > 0));
         } finally {
@@ -113,43 +192,54 @@ export default function AdminPage() {
 
     async function uploadVotesCsv(file: File) {
         setUploading(true);
-
         try {
-            const parsed = await new Promise<{ rows: UploadRow[]; guessedMatchday: number | null }>((resolve, reject) => {
-                Papa.parse<CsvRow>(file, {
+            const text = await file.text();
+            const found = findHeaderAndDelimiter(text);
+
+            if (!found) {
+                throw new Error(
+                    "Header non trovato nel CSV voti.\nMi aspetto una colonna ID (Id/#/Codice) e una colonna Voto (Voto/V/MV)."
+                );
+            }
+
+            const { headerIndex, delimiter, lines } = found;
+            const sliced = lines.slice(headerIndex).join("\n");
+
+            const parsedRows = await new Promise<UploadRow[]>((resolve, reject) => {
+                Papa.parse<CsvRow>(sliced, {
                     header: true,
                     skipEmptyLines: true,
-                    delimiter: "", // auto
+                    delimiter, // ✅ quello trovato
                     transformHeader: (h) => h.trim(),
                     complete: (res) => {
                         const rows = (res.data ?? []).filter(Boolean);
 
-                        // CSV voti: cerco colonne comuni:
-                        // Id o #  -> extId
-                        // Voto o V o MV -> voto
-                        // Bonus/malus opzionali: Gf Gs Rp Rs Rf Au Amm Esp Ass
                         const out: UploadRow[] = rows
-                            .map((r) => {
-                                const extId = toInt(getField(r, ["Id", "#", "ID", "IdGiocatore", "ID Giocatore"]));
+                            .map((raw) => {
+                                const r = buildNormRow(raw);
+
+                                const extIdVal = getFieldNorm(r, ID_KEYS);
+                                const extId = toInt(extIdVal);
                                 if (!extId) return null;
 
-                                const voteRawVal = getField(r, ["Voto", "V", "MV", "Vt", "Voto Statistico"]);
+                                const voteRawVal = getFieldNorm(r, VOTE_KEYS);
                                 const voteRaw = voteRawVal != null ? String(voteRawVal) : null;
                                 const vote = toFloat(voteRawVal);
 
+                                // ⚠️ accetto anche righe senza voto (es. SV): le carico come vote=null (decidi tu)
                                 const row: UploadRow = {
                                     playerExtId: extId,
                                     voteRaw,
                                     vote: vote == null ? null : vote,
-                                    gf: toInt(getField(r, ["Gf", "GF", "Gol Fatti", "GFatti"])) ?? 0,
-                                    gs: toInt(getField(r, ["Gs", "GS", "Gol Subiti", "GSubiti"])) ?? 0,
-                                    rp: toInt(getField(r, ["Rp", "RP", "Rigori Parati"])) ?? 0,
-                                    rs: toInt(getField(r, ["Rs", "RS", "Rigori Sbagliati"])) ?? 0,
-                                    rf: toInt(getField(r, ["Rf", "RF", "Rigori Fatti"])) ?? 0,
-                                    au: toInt(getField(r, ["Au", "AU", "Autogol"])) ?? 0,
-                                    amm: toInt(getField(r, ["Amm", "AMM", "Ammonizioni"])) ?? 0,
-                                    esp: toInt(getField(r, ["Esp", "ESP", "Espulsioni"])) ?? 0,
-                                    ass: toInt(getField(r, ["Ass", "ASS", "Assist"])) ?? 0,
+                                    gf: toInt(getFieldNorm(r, INT_KEYS.gf)) ?? 0,
+                                    gs: toInt(getFieldNorm(r, INT_KEYS.gs)) ?? 0,
+                                    rp: toInt(getFieldNorm(r, INT_KEYS.rp)) ?? 0,
+                                    rs: toInt(getFieldNorm(r, INT_KEYS.rs)) ?? 0,
+                                    rf: toInt(getFieldNorm(r, INT_KEYS.rf)) ?? 0,
+                                    au: toInt(getFieldNorm(r, INT_KEYS.au)) ?? 0,
+                                    amm: toInt(getFieldNorm(r, INT_KEYS.amm)) ?? 0,
+                                    esp: toInt(getFieldNorm(r, INT_KEYS.esp)) ?? 0,
+                                    ass: toInt(getFieldNorm(r, INT_KEYS.ass)) ?? 0,
                                 };
 
                                 return row;
@@ -157,35 +247,29 @@ export default function AdminPage() {
                             .filter((x): x is UploadRow => x !== null);
 
                         if (!out.length) {
-                            reject(new Error("CSV non valido: nessuna riga con Id/# e Voto/V/MV"));
+                            reject(new Error("CSV non valido: nessuna riga con ID giocatore valido."));
                             return;
                         }
 
-                        const guessedMatchday = findMatchdayFromCsv(rows);
-                        resolve({ rows: out, guessedMatchday });
+                        resolve(out);
                     },
                     error: (err) => reject(err),
                 });
             });
 
-            // ✅ se il CSV contiene già la giornata, ti aiuto ad auto-compilarla (senza forzare)
-            const finalMatchday = parsed.guessedMatchday ?? matchday;
-
             const res = await fetch("/api/admin/matchdays/load", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ matchday: finalMatchday, rows: parsed.rows }),
+                body: JSON.stringify({ matchday, rows: parsedRows }),
             });
 
             const data = await res.json().catch(() => ({}));
             if (!res.ok) throw new Error(data?.error ?? "Upload fallito");
 
             alert(
-                `OK! Giornata ${finalMatchday}\nRicevute: ${data.received}\nUpsert: ${data.upserted}\nSkipped: ${data.skipped}`
+                `OK! Giornata ${matchday}\nRicevute: ${data.received}\nUpsert: ${data.upserted}\nSkipped: ${data.skipped}\nPlayersFound: ${data.playersFound}`
             );
 
-            // riallineo l'input se ho usato una giornata dedotta
-            setMatchday(finalMatchday);
             await fetchLoadedDays();
         } catch (e) {
             alert(e instanceof Error ? e.message : "Errore upload");
@@ -209,7 +293,7 @@ export default function AdminPage() {
                     title="Giornata"
                 />
 
-                <input type="file" accept=".csv" onChange={(e) => setFile(e.target.files?.[0] || null)} />
+                <input type="file" accept=".csv,.txt" onChange={(e) => setFile(e.target.files?.[0] || null)} />
 
                 <button
                     className="bg-black text-white px-4 py-2 rounded disabled:opacity-60"
@@ -220,7 +304,6 @@ export default function AdminPage() {
                 </button>
             </div>
 
-            {/* ✅ SOTTO AL PULSANTE: GIORNATE */}
             <div className="space-y-2 pt-2">
                 <div className="flex items-center justify-between">
                     <p className="font-semibold">Giornate (1–{TOTAL_MATCHDAYS})</p>
@@ -250,11 +333,6 @@ export default function AdminPage() {
 
                 <p className="text-sm text-gray-500">
                     Caricate: <span className="font-semibold">{loadedDays.length}</span> / {TOTAL_MATCHDAYS}
-                </p>
-
-                <p className="text-xs text-gray-500">
-                    Nota: la griglia dipende da <code>/api/admin/matchdays/loaded</code>. Se non segna le giornate già caricate,
-                    è l’endpoint che sta restituendo una lista incompleta.
                 </p>
             </div>
         </main>
