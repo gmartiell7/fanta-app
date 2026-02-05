@@ -13,12 +13,12 @@ const MAIN_LINKS = [
 
 const ADMIN_LINKS = [
     { href: "/admin/listone", label: "Inserimento listone" },
+    { href: "/admin/calendario", label: "Inserimento calendario" },
     { href: "/admin/voti", label: "Inserimento voti" },
 ];
 
 export const dynamic = "force-dynamic";
 export const revalidate = 0;
-
 
 export default async function NavbarServer() {
     const session = await getServerSession(authOptions);
@@ -98,7 +98,11 @@ export default async function NavbarServer() {
                             <LogoutButton />
 
                             {/* MOBILE MENU */}
-                            <MobileMenu mainLinks={MAIN_LINKS} adminLinks={ADMIN_LINKS} isAdmin={isAdmin} />
+                            <MobileMenu
+                                mainLinks={MAIN_LINKS}
+                                adminLinks={ADMIN_LINKS}
+                                isAdmin={isAdmin}
+                            />
                         </div>
                     </div>
                 </div>
