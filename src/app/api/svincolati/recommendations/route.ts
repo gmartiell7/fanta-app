@@ -1,3 +1,4 @@
+// src/app/api/svincolati/recommendations/route.ts
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { calcFmvMeClient } from "@/lib/fantaConfig";
@@ -18,10 +19,23 @@ type IncomingPlayer = {
 
     pg: number | null; // PGv
     mv: number | null; // MV
-    fm: number | null; // FM
+    fm: number | null; // FM (Fantamedia dal CSV)
 };
 
-const MANTRA_ROLES = ["Por", "Dc", "Dd", "Ds", "E", "M", "C", "W", "T", "A", "Pc"] as const;
+const MANTRA_ROLES = [
+    "Por",
+    "Dc",
+    "Dd",
+    "Ds",
+    "E",
+    "M",
+    "C",
+    "W",
+    "T",
+    "A",
+    "Pc",
+] as const;
+
 const CLASSIC_ROLES = ["P", "D", "C", "A"] as const;
 
 function splitMulti(s?: string | null) {
@@ -31,55 +45,60 @@ function splitMulti(s?: string | null) {
         .filter(Boolean);
 }
 
-function hasRoleForMode(mode: GameMode, p: { roleMantra?: string | null; roleClassic?: string | null }, base: string) {
+function hasRoleForMode(
+    mode: GameMode,
+    p: { roleMantra?: string | null; roleClassic?: string | null },
+    base: string
+) {
     if (mode === "CLASSIC") return splitMulti(p.roleClassic).includes(base);
     return splitMulti(p.roleMantra).includes(base);
 }
 
-// ✅ IDENTICA (coerente) alla formula che usi in MeClient/team
-function calcFmv(s: {
-    vote: number | null;
-    gf: number;
-    gs: number;
-    rp: number;
-    rs: number;
-    rf: number;
-    au: number;
-    amm: number;
-    esp: number;
-    ass: number;
-}) {
-    if (s.vote === null) return null;
-
-    return (
-        s.vote +
-        s.gf * 3 -
-        s.gs * 1 +
-        s.rp * 3 -
-        s.rs * 3 +
-        s.rf * 3 -
-        s.au * 2 -
-        s.amm * 0.5 -
-        s.esp * 1 +
-        s.ass * 1
-    );
-}
-
-/** ultimo=0 poi +1 risalendo (come avevi tu: min->max) */
-function assignRankPoints<T>(items: T[], getValue: (x: T) => number, getKey: (x: T) => string) {
+/**
+ * Punti "rank" coerenti con la tua logica:
+ * - ordina asc (peggiore -> migliore)
+ * - ultimo prende max punti (n-1), primo 0
+ * - a parità di valore, stessi punti (firstIndex)
+ */
+function assignRankPoints<T>(
+    items: T[],
+    getValue: (x: T) => number,
+    getKey: (x: T) => string
+) {
     const sorted = [...items].sort((a, b) => getValue(a) - getValue(b));
+
     const pts = new Map<string, number>();
-    for (let i = 0; i < sorted.length; i++) pts.set(getKey(sorted[i]), i);
+
+    let i = 0;
+    while (i < sorted.length) {
+        const v = getValue(sorted[i]);
+        const firstIndex = i;
+
+        let j = i;
+        while (j < sorted.length && getValue(sorted[j]) === v) j++;
+
+        for (let k = i; k < j; k++) {
+            pts.set(getKey(sorted[k]), firstIndex);
+        }
+
+        i = j;
+    }
+
     return pts;
 }
 
-/** duelli cumulativi */
-function computeDuels(ids: string[], matchdays: number[], getVal: (id: string, g: number) => number | null) {
+/** duelli cumulativi (come in client): v>altro => +1, null/mancante = 0 */
+function computeDuels(
+    ids: string[],
+    matchdays: number[],
+    getVal: (id: string, g: number) => number | null
+) {
     const wins = new Map<string, number>();
     ids.forEach((id) => wins.set(id, 0));
 
     for (const g of matchdays) {
         const vals = ids.map((id) => ({ id, v: getVal(id, g) ?? 0 }));
+
         for (let i = 0; i < vals.length; i++) {
             for (let j = 0; j < vals.length; j++) {
                 if (i !== j && vals[i].v > vals[j].v) {
@@ -88,12 +107,14 @@ function computeDuels(ids: string[], matchdays: number[], getVal: (id: string, g
             }
         }
     }
+
     return wins;
 }
 
 function bonusLast5(matchdays: number[], getVote: (g: number) => number | null) {
     const last5 = matchdays.slice(-5);
     if (last5.length < 5) return 1;
+
     for (const g of last5) {
         const v = getVote(g);
         if (v === null || v <= 6.5) return 1;
@@ -102,22 +123,38 @@ function bonusLast5(matchdays: number[], getVote: (g: number) => number | null) 
 }
 
 export async function POST(req: Request) {
-    const body = await req.json();
+    const body = await req.json().catch(() => ({} as any));
 
-    const mode: GameMode = String(body?.gameMode ?? "MANTRA").toUpperCase() === "CLASSIC" ? "CLASSIC" : "MANTRA";
+    const mode: GameMode =
+        String(body?.gameMode ?? "MANTRA").toUpperCase() === "CLASSIC"
+            ? "CLASSIC"
+            : "MANTRA";
 
-    const players: IncomingPlayer[] = Array.isArray(body?.players) ? body.players : [];
-    const selectedExtId: number | null = Number.isFinite(body?.selectedExtId) ? body.selectedExtId : null;
+    const players: IncomingPlayer[] = Array.isArray(body?.players)
+        ? body.players
+        : [];
 
-    if (!players.length && !selectedExtId) {
+    // ✅ parsing robusto (arriva spesso string/null)
+    const selectedRaw = body?.selectedExtId;
+    const selectedExtId =
+        selectedRaw === null || selectedRaw === undefined || selectedRaw === ""
+            ? null
+            : Number(selectedRaw);
+    const selectedExtIdSafe: number | null = Number.isFinite(selectedExtId)
+        ? selectedExtId
+        : null;
+
+    if (!players.length && !selectedExtIdSafe) {
         return NextResponse.json({ byRole: {}, matchdays: [] });
     }
 
     // extId -> Player.id
     const extIds = Array.from(
         new Set([
-            ...players.map((p) => Number(p.extId)).filter((x) => Number.isFinite(x)),
-            ...(selectedExtId ? [selectedExtId] : []),
+            ...players
+                .map((p) => Number(p.extId))
+                .filter((x) => Number.isFinite(x)),
+            ...(selectedExtIdSafe ? [selectedExtIdSafe] : []),
         ])
     );
 
@@ -160,7 +197,9 @@ export async function POST(req: Request) {
         },
     });
 
-    const matchdays = Array.from(new Set(stats.map((s) => s.matchday))).sort((a, b) => a - b);
+    const matchdays = Array.from(new Set(stats.map((s) => s.matchday))).sort(
+        (a, b) => a - b
+    );
 
     // playerId -> (matchday -> vote/fmv)
     const voteMap = new Map<string, Map<number, number | null>>();
@@ -174,6 +213,7 @@ export async function POST(req: Request) {
     for (const s of stats) {
         const vote = s.vote ?? null;
 
+        // ✅ stessa formula che usi in MeClient/TeamClient (via lib)
         const fmv = calcFmvMeClient({
             vote,
             gf: s.gf,
@@ -216,16 +256,21 @@ export async function POST(req: Request) {
         .filter((x): x is NonNullable<typeof x> => !!x);
 
     // ✅ Aggiungo eventuale giocatore selezionato (da DB)
-    if (selectedExtId) {
-        const sel = byExtId.get(selectedExtId);
-        const alreadyIn = enriched.some((p) => p.extId === selectedExtId);
+    if (selectedExtIdSafe) {
+        const sel = byExtId.get(selectedExtIdSafe);
+        const alreadyIn = enriched.some((p) => p.extId === selectedExtIdSafe);
 
         if (sel && !alreadyIn) {
             const votes = voteMap.get(sel.id) ?? new Map();
             const fmvs = fmvMap.get(sel.id) ?? new Map();
 
-            const mvArr = matchdays.map((g) => votes.get(g)).filter((x): x is number => x != null);
-            const fmArr = matchdays.map((g) => fmvs.get(g)).filter((x): x is number => x != null);
+            const mvArr = matchdays
+                .map((g) => votes.get(g))
+                .filter((x): x is number => x != null);
+
+            const fmArr = matchdays
+                .map((g) => fmvs.get(g))
+                .filter((x): x is number => x != null);
 
             enriched.push({
                 extId: sel.extId,
@@ -264,34 +309,57 @@ export async function POST(req: Request) {
 
     // calcolo punteggi per ruolo
     const out: Record<string, any[]> = {};
-    roles.forEach((r) => (out[r] = []));
 
     for (const role of roles) {
         const list = byRole[role];
         if (!list.length) continue;
 
-        const mvPts = assignRankPoints(list, (x) => x.mv ?? -9999, (x) => x.dbId);
-        const fmPts = assignRankPoints(list, (x) => x.fm ?? -9999, (x) => x.dbId);
+        const mvPts = assignRankPoints(
+            list,
+            (x) => (x.mv ?? -Infinity),
+            (x) => x.dbId
+        );
+        const fmPts = assignRankPoints(
+            list,
+            (x) => (x.fm ?? -Infinity),
+            (x) => x.dbId
+        );
 
         const ids = list.map((x) => x.dbId);
 
-        const duelMvRaw = computeDuels(ids, matchdays, (id, g) => voteMap.get(id)?.get(g) ?? null);
-        const duelFmvRaw = computeDuels(ids, matchdays, (id, g) => fmvMap.get(id)?.get(g) ?? null);
+        const duelMvRaw = computeDuels(ids, matchdays, (id, g) => {
+            const v = voteMap.get(id)?.get(g);
+            return v ?? null;
+        });
 
-        const duelMvPts = assignRankPoints(list, (x) => duelMvRaw.get(x.dbId) ?? 0, (x) => x.dbId);
-        const duelFmvPts = assignRankPoints(list, (x) => duelFmvRaw.get(x.dbId) ?? 0, (x) => x.dbId);
+        const duelFmvRaw = computeDuels(ids, matchdays, (id, g) => {
+            const v = fmvMap.get(id)?.get(g);
+            return v ?? null;
+        });
+
+        const duelMvPts = assignRankPoints(
+            list,
+            (x) => duelMvRaw.get(x.dbId) ?? 0,
+            (x) => x.dbId
+        );
+        const duelFmvPts = assignRankPoints(
+            list,
+            (x) => duelFmvRaw.get(x.dbId) ?? 0,
+            (x) => x.dbId
+        );
 
         out[role] = list
             .map((p) => {
                 const votes = voteMap.get(p.dbId) ?? new Map();
                 const bonus = bonusLast5(matchdays, (g) => votes.get(g) ?? null);
 
-                const total =
-                    ((mvPts.get(p.dbId) ?? 0) +
-                        (fmPts.get(p.dbId) ?? 0) +
-                        (duelMvPts.get(p.dbId) ?? 0) +
-                        (duelFmvPts.get(p.dbId) ?? 0)) *
-                    bonus;
+                const base =
+                    (mvPts.get(p.dbId) ?? 0) +
+                    (fmPts.get(p.dbId) ?? 0) +
+                    (duelMvPts.get(p.dbId) ?? 0) +
+                    (duelFmvPts.get(p.dbId) ?? 0);
+
+                const total = base * bonus;
 
                 return {
                     ...p,

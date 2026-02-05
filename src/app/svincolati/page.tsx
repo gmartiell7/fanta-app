@@ -1,3 +1,4 @@
+// src/app/svincolati/page.tsx
 "use client";
 
 import React, {
@@ -35,7 +36,6 @@ type SvincolatoPlayer = {
 };
 
 type RecommendationRow = SvincolatoPlayer & {
-    // campi calcolati dalla tua API /api/svincolati/recommendations
     pt_mv_rank?: number;
     pt_fm_rank?: number;
     pt_duel_mv?: number;
@@ -53,7 +53,19 @@ function isEmpty(v: unknown) {
     return v == null || String(v).trim() === "";
 }
 
-const MANTRA_ROLES = ["Por", "Dc", "Dd", "Ds", "E", "M", "C", "W", "T", "A", "Pc"];
+const MANTRA_ROLES = [
+    "Por",
+    "Dc",
+    "Dd",
+    "Ds",
+    "E",
+    "M",
+    "C",
+    "W",
+    "T",
+    "A",
+    "Pc",
+];
 const CLASSIC_ROLES = ["P", "D", "C", "A"];
 
 function tierFromRank(pos1based: number) {
@@ -88,11 +100,7 @@ function canonicalTeamName(s: string) {
     const lower = t.toLowerCase();
 
     // Verona
-    if (
-        lower === "hellas verona" ||
-        lower === "hellasverona" ||
-        lower === "ver"
-    )
+    if (lower === "hellas verona" || lower === "hellasverona" || lower === "ver")
         return "Verona";
 
     // Abbreviazioni tipiche listone
@@ -160,9 +168,7 @@ export default function SvincolatiPage() {
     const [selectedExtId, setSelectedExtId] = useState<number | null>(null);
 
     const [svPlayers, setSvPlayers] = useState<SvincolatoPlayer[]>([]);
-    const [byRole, setByRole] = useState<Record<string, RecommendationRow[]>>(
-        {}
-    );
+    const [byRole, setByRole] = useState<Record<string, RecommendationRow[]>>({});
     const [loading, setLoading] = useState(false);
 
     const [teamColorByKey, setTeamColorByKey] = useState<Map<string, TeamColor>>(
@@ -186,7 +192,7 @@ export default function SvincolatiPage() {
         {}
     );
 
-    // ✅ deferred search (stessa logica, UI più fluida)
+    // ✅ deferred search (UI più fluida)
     const deferredSearchName = useDeferredValue(searchName);
 
     const getTeamColor = useCallback(
@@ -194,7 +200,7 @@ export default function SvincolatiPage() {
         [teamColorByKey]
     );
 
-    // ✅ set per lookup O(1) (evita svPlayers.some in ogni riga)
+    // ✅ set per lookup O(1)
     const svExtIdSet = useMemo(() => {
         const s = new Set<number>();
         for (const p of svPlayers) {
@@ -256,7 +262,6 @@ export default function SvincolatiPage() {
         loadNotes();
 
         const timers = saveTickTimers.current; // snapshot
-
         return () => {
             for (const k of Object.keys(timers)) {
                 const id = timers[Number(k)];
@@ -374,14 +379,25 @@ export default function SvincolatiPage() {
                     const players: SvincolatoPlayer[] = rows
                         .filter((r) => isEmpty(r["Fuori lista"]))
                         .map((r) => {
-                            // CSV: proviamo a leggere sia Mantra che Classic in modo robusto
-                            const roleMantra = readCsvField(r, ["R.MANTRA", "R MANTRA", "RMANTRA"]);
-                            const roleClassic = readCsvField(r, ["R", "R.CLASSIC", "R CLASSIC", "R.CLA", "R CLA"]);
+                            const roleMantra = readCsvField(r, [
+                                "R.MANTRA",
+                                "R MANTRA",
+                                "RMANTRA",
+                            ]);
+                            const roleClassic = readCsvField(r, [
+                                "R",
+                                "R.CLASSIC",
+                                "R CLASSIC",
+                                "R.CLA",
+                                "R CLA",
+                            ]);
 
                             const p: SvincolatoPlayer = {
                                 extId: Number(readCsvField(r, ["#", "Id", "ID"])),
                                 name: String(readCsvField(r, ["Nome", "Giocatore"]) ?? ""),
-                                team: String(readCsvField(r, ["Sq.", "Squadra", "Squadra."]) ?? ""),
+                                team: String(
+                                    readCsvField(r, ["Sq.", "Squadra", "Squadra."]) ?? ""
+                                ),
                                 roleMantra: roleMantra != null ? String(roleMantra) : null,
                                 roleClassic: roleClassic != null ? String(roleClassic) : null,
                                 pg: toNum(readCsvField(r, ["PGv", "PG"])),
@@ -395,7 +411,9 @@ export default function SvincolatiPage() {
                     // ✅ se sono in Classic: tengo solo player con roleClassic valorizzato
                     const filtered =
                         mode === "CLASSIC"
-                            ? players.filter((p) => String(p.roleClassic ?? "").trim().length > 0)
+                            ? players.filter(
+                                (p) => String(p.roleClassic ?? "").trim().length > 0
+                            )
                             : players;
 
                     setSvPlayers(filtered);
@@ -406,6 +424,22 @@ export default function SvincolatiPage() {
         [mode, recompute, selectedExtId]
     );
 
+    // ✅ quando cambia la modalità: riallinea la lista svincolati (Classic => solo roleClassic)
+    useEffect(() => {
+        setSvPlayers((prev) => {
+            const next =
+                mode === "CLASSIC"
+                    ? prev.filter((p) => String(p.roleClassic ?? "").trim().length > 0)
+                    : prev;
+
+            if (next.length !== prev.length) {
+                recompute(next, selectedExtId, mode);
+            }
+            return next;
+        });
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [mode]);
+
     useEffect(() => {
         if (svPlayers.length) recompute(svPlayers, selectedExtId, mode);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -414,7 +448,9 @@ export default function SvincolatiPage() {
     const removeSvincolato = useCallback(
         (extIdToRemove: number) => {
             setSvPlayers((prev) => {
-                const next = prev.filter((p) => Number(p.extId) !== Number(extIdToRemove));
+                const next = prev.filter(
+                    (p) => Number(p.extId) !== Number(extIdToRemove)
+                );
                 recompute(next, selectedExtId, mode);
                 return next;
             });
@@ -427,7 +463,20 @@ export default function SvincolatiPage() {
         [deferredSearchName]
     );
 
-    const rolesUniverse = useMemo(() => getRolesList(mode), [mode]);
+    // ✅ RUOLI: se l'API ha già mandato delle chiavi, usiamo QUELLE (sono la verità).
+    //     Questo evita "pagina vuota" quando in Classic l'API manda ancora ruoli Mantra.
+    const rolesUniverse = useMemo(() => {
+        const keys = Object.keys(byRole ?? {});
+        if (keys.length > 0) return keys.sort((a, b) => a.localeCompare(b, "it"));
+        return getRolesList(mode);
+    }, [byRole, mode]);
+
+    // ✅ se selectedRole non esiste più nei ruoli disponibili, lo resettiamo
+    useEffect(() => {
+        if (selectedRole && !rolesUniverse.includes(selectedRole)) {
+            setSelectedRole("");
+        }
+    }, [rolesUniverse, selectedRole]);
 
     const availableRoles = useMemo(() => {
         const has = (r: string) => (byRole[r] ?? []).length > 0;
