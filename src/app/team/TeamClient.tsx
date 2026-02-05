@@ -196,10 +196,9 @@ export default function TeamPage() {
             const res = await fetch("/api/team/players", { cache: "no-store" });
             const data = await res.json();
 
-
-
-
-            throw new Error(data?.error ?? "Errore caricamento rosa");
+            if (!res.ok) {
+                throw new Error(data?.error ?? "Errore caricamento rosa");
+            }
 
             setRoster(data.roster ?? []);
             const name = data.team?.name ?? "";
@@ -211,6 +210,7 @@ export default function TeamPage() {
             setLoadingRoster(false);
         }
     }
+
 
     async function loadRoles() {
         try {
