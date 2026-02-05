@@ -44,7 +44,6 @@ function toFloat(v: unknown): number | null {
 }
 
 function normKey(k: string) {
-    // "Cod." -> "cod"
     return norm(k)
         .toLowerCase()
         .replace(/[’'`.]/g, "")
@@ -52,7 +51,6 @@ function normKey(k: string) {
         .replace(/[^a-z0-9#]/g, "");
 }
 
-/** split semplice (solo per trovare header+delimiter) */
 function splitBySep(line: string, sep: string) {
     const out: string[] = [];
     let cur = "";
@@ -82,11 +80,8 @@ function splitBySep(line: string, sep: string) {
     return out;
 }
 
-// ✅ nel tuo CSV l'ID è "Cod."
 const ID_KEYS = ["#", "id", "cod", "codice", "codgiocatore", "idgiocatore", "idplayer", "playerid"];
-
-// ✅ nel tuo CSV il voto è "Voto"
-const VOTE_KEYS = ["voto", "v", "mv", "votostatistico", "votost", "votofg", "votogazzetta", "votopagella"];
+const VOTE_KEYS = ["voto", "v", "mv", "votostatistico", "votost", "votofg"];
 
 const INT_KEYS = {
     gf: ["gf", "golfatti", "gol"],
@@ -116,7 +111,6 @@ function getFieldNorm(r: Record<string, unknown>, keys: string[]) {
     return undefined;
 }
 
-/** trova riga header e delimiter plausibile */
 function findHeaderAndDelimiter(text: string) {
     const lines = text.split(/\r?\n/).map((l) => l.replace(/\r/g, ""));
     const seps = [";", ",", "\t"];
@@ -132,9 +126,7 @@ function findHeaderAndDelimiter(text: string) {
             const hasId = cols.some((c) => ID_KEYS.includes(c));
             const hasVote = cols.some((c) => VOTE_KEYS.includes(c));
 
-            if (hasId && hasVote) {
-                return { headerIndex: i, delimiter: sep, lines };
-            }
+            if (hasId && hasVote) return { headerIndex: i, delimiter: sep, lines };
         }
     }
     return null;
@@ -142,6 +134,7 @@ function findHeaderAndDelimiter(text: string) {
 
 export default function AdminPage() {
     const { data: session, status } = useSession();
+
     const [file, setFile] = useState<File | null>(null);
     const [matchday, setMatchday] = useState<number>(1);
 
@@ -173,10 +166,10 @@ export default function AdminPage() {
 
     const loadedSet = useMemo(() => new Set(loadedDays), [loadedDays]);
 
-    async function uploadVotesCsv(file: File) {
+    async function uploadVotesCsv(f: File) {
         setUploading(true);
         try {
-            const text = await file.text();
+            const text = await f.text();
             const found = findHeaderAndDelimiter(text);
 
             if (!found) {
@@ -187,7 +180,7 @@ export default function AdminPage() {
 
             const { headerIndex, delimiter, lines } = found;
 
-            // ✅ scarta tutto prima dell’header (nel tuo CSV ci sono righe di testo + nome squadra)
+            // scarta tutto prima dell’header (nel tuo CSV ci sono righe di testo + nome squadra)
             const sliced = lines.slice(headerIndex).join("\n");
 
             const parsedRows = await new Promise<UploadRow[]>((resolve, reject) => {
@@ -197,10 +190,10 @@ export default function AdminPage() {
                     delimiter,
                     transformHeader: (h) => h.trim(),
                     complete: (res) => {
-                        const rows = (res.data ?? []).filter(Boolean);
+                        const rows: CsvRow[] = (res.data ?? []).filter((r): r is CsvRow => Boolean(r));
 
-                        const out: UploadRow[] = rows
-                            .map((raw) => {
+                        const out = rows
+                            .map((raw): UploadRow | null => {
                                 const r = buildNormRow(raw);
 
                                 const extIdVal = getFieldNorm(r, ID_KEYS);
@@ -226,6 +219,7 @@ export default function AdminPage() {
                                     ass: toInt(getFieldNorm(r, INT_KEYS.ass)) ?? 0,
                                 };
                             })
+                            // ✅ FIX: type-guard (così TS sa che non ci sono null)
                             .filter((x): x is UploadRow => x !== null);
 
                         if (!out.length) {
@@ -235,7 +229,6 @@ export default function AdminPage() {
 
                         resolve(out);
                     },
-                    // ✅ FIX TS: niente implicit any
                     error: (err: unknown) => reject(err),
                 });
             });
