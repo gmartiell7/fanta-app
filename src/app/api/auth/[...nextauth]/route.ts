@@ -26,17 +26,15 @@ export const authOptions: NextAuthOptions = {
                         name: true,
                         role: true,
                         password: true,
-                        emailVerified: true, // ✅ IMPORTANT
+                        emailVerified: true,
                     },
                 });
 
                 if (!user) return null;
 
-                // ✅ blocca login finché non verifica email
-              //  if (!user.emailVerified) {
-                    // Questo diventa result.error lato client (signIn)
-              //      throw new Error("EMAIL_NOT_VERIFIED");
-              //  }
+                // if (!user.emailVerified) {
+                //   throw new Error("EMAIL_NOT_VERIFIED");
+                // }
 
                 const ok = await bcrypt.compare(credentials.password, user.password);
                 if (!ok) return null;
@@ -50,34 +48,47 @@ export const authOptions: NextAuthOptions = {
             },
         }),
     ],
+
     callbacks: {
         async jwt({ token, user }) {
-            // Porta dentro token i dati dell'utente quando fa login
+            // 1) dati base al login
             if (user) {
                 token.id = (user as any).id;
                 token.email = (user as any).email ?? token.email;
                 token.role = (user as any).role;
             }
 
-            // ✅ Admin sempre calcolato da ENV (robusto anche in produzione)
-            const email = (token.email as string | undefined) ?? undefined;
-            (token as any).isAdmin = isAdminEmail(email);
+            // 2) ✅ RIALLINEA SEMPRE role DAL DB (così admin funziona anche senza logout/login)
+            const email = (token.email as string | undefined)?.toLowerCase();
+            if (email) {
+                const dbUser = await prisma.user.findUnique({
+                    where: { email },
+                    select: { id: true, role: true },
+                });
+
+                if (dbUser) {
+                    token.id = (token as any).id ?? dbUser.id;
+                    token.role = dbUser.role; // ✅ aggiornamento “live”
+                }
+            }
+
+            // 3) ✅ isAdmin: DB role ADMIN OR allowlist env
+            const role = String((token as any).role ?? "");
+            (token as any).isAdmin = role === "ADMIN" || isAdminEmail(email);
 
             return token;
         },
+
         async session({ session, token }) {
             if (session.user) {
                 (session.user as any).id = (token as any).id;
                 (session.user as any).role = (token as any).role;
-
-                // ✅ flag pronto per navbar / pagine protette
                 (session.user as any).isAdmin = Boolean((token as any).isAdmin);
             }
             return session;
         },
     },
 
-    // (opzionale ma consigliato) pagina custom di login se la usi già
     // pages: { signIn: "/login" },
 };
 

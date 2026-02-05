@@ -3,8 +3,9 @@
 import { useSession } from "next-auth/react";
 import { useEffect, useMemo, useState } from "react";
 
-type UserWithRole = {
+type UserWithAdmin = {
     role?: string;
+    isAdmin?: boolean;
 };
 
 const TOTAL_MATCHDAYS = 38;
@@ -18,8 +19,10 @@ export default function AdminPage() {
 
     if (status === "loading") return <p>Caricamento...</p>;
 
-    const role = (session?.user as UserWithRole | undefined)?.role;
-    if (!session || role !== "ADMIN") {
+    const u = (session?.user as UserWithAdmin | undefined) ?? undefined;
+    const isAdmin = Boolean(u?.isAdmin) || u?.role === "ADMIN";
+
+    if (!session || !isAdmin) {
         return <p>Accesso negato</p>;
     }
 
@@ -52,9 +55,12 @@ export default function AdminPage() {
         });
 
         const data = await res.json();
-        alert(`Inseriti ${data.inserted} giocatori`);
+        if (!res.ok) {
+            alert(data?.error ?? "Upload fallito");
+            return;
+        }
 
-        // ✅ se stai caricando i voti, aggiorna subito il verde
+        alert(`Inseriti ${data.inserted ?? data.updatedOrInserted ?? 0} giocatori`);
         await fetchLoadedDays();
     };
 
@@ -68,23 +74,15 @@ export default function AdminPage() {
                 onChange={(e) => setFile(e.target.files?.[0] || null)}
             />
 
-            <button
-                className="bg-black text-white px-4 py-2 rounded"
-                onClick={upload}
-            >
+            <button className="bg-black text-white px-4 py-2 rounded" onClick={upload}>
                 Carica voto
             </button>
 
-            {/* ✅ SOTTO AL PULSANTE: GIORNATE */}
             <div className="space-y-2 pt-2">
                 <div className="flex items-center justify-between">
                     <p className="font-semibold">Giornate (1–{TOTAL_MATCHDAYS})</p>
 
-                    <button
-                        className="text-sm underline"
-                        onClick={fetchLoadedDays}
-                        disabled={loadingDays}
-                    >
+                    <button className="text-sm underline" onClick={fetchLoadedDays} disabled={loadingDays}>
                         {loadingDays ? "Aggiorno..." : "Aggiorna"}
                     </button>
                 </div>
@@ -110,8 +108,7 @@ export default function AdminPage() {
                 </div>
 
                 <p className="text-sm text-gray-500">
-                    Caricate: <span className="font-semibold">{loadedDays.length}</span> /{" "}
-                    {TOTAL_MATCHDAYS}
+                    Caricate: <span className="font-semibold">{loadedDays.length}</span> / {TOTAL_MATCHDAYS}
                 </p>
             </div>
         </main>
