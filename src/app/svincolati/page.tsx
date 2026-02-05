@@ -45,7 +45,9 @@ type RecommendationRow = SvincolatoPlayer & {
 
 function toNum(v: unknown): number | null {
     if (v == null) return null;
-    const n = Number(String(v).replace(",", "."));
+    const s = String(v).trim();
+    if (!s) return null;
+    const n = Number(s.replace(",", "."));
     return Number.isFinite(n) ? n : null;
 }
 
@@ -53,19 +55,7 @@ function isEmpty(v: unknown) {
     return v == null || String(v).trim() === "";
 }
 
-const MANTRA_ROLES = [
-    "Por",
-    "Dc",
-    "Dd",
-    "Ds",
-    "E",
-    "M",
-    "C",
-    "W",
-    "T",
-    "A",
-    "Pc",
-];
+const MANTRA_ROLES = ["Por", "Dc", "Dd", "Ds", "E", "M", "C", "W", "T", "A", "Pc"];
 const CLASSIC_ROLES = ["P", "D", "C", "A"];
 
 function tierFromRank(pos1based: number) {
@@ -100,8 +90,7 @@ function canonicalTeamName(s: string) {
     const lower = t.toLowerCase();
 
     // Verona
-    if (lower === "hellas verona" || lower === "hellasverona" || lower === "ver")
-        return "Verona";
+    if (lower === "hellas verona" || lower === "hellasverona" || lower === "ver") return "Verona";
 
     // Abbreviazioni tipiche listone
     const map: Record<string, string> = {
@@ -153,11 +142,38 @@ function getRolesList(mode: GameMode) {
     return mode === "CLASSIC" ? CLASSIC_ROLES : MANTRA_ROLES;
 }
 
+/** normalizza header: lower + remove spazi/punti/underscore */
+function normKey(k: string) {
+    return String(k ?? "")
+        .replace(/^\uFEFF/, "")
+        .trim()
+        .toLowerCase()
+        .replace(/[\s._()-]+/g, "");
+}
+
+/**
+ * Legge un campo in modo robusto:
+ * - prova chiavi esatte
+ * - poi prova match per normalizzazione (ignora punti/spazi/underscore e case)
+ */
 function readCsvField(r: CsvRow, keys: string[]) {
+    // 1) exact
     for (const k of keys) {
         const v = r[k];
         if (!isEmpty(v)) return v;
     }
+
+    // 2) normalized match
+    const wanted = keys.map(normKey);
+    const rowKeys = Object.keys(r);
+
+    for (const rk of rowKeys) {
+        const nk = normKey(rk);
+        if (!wanted.includes(nk)) continue;
+        const v = r[rk];
+        if (!isEmpty(v)) return v;
+    }
+
     return undefined;
 }
 
@@ -171,9 +187,7 @@ export default function SvincolatiPage() {
     const [byRole, setByRole] = useState<Record<string, RecommendationRow[]>>({});
     const [loading, setLoading] = useState(false);
 
-    const [teamColorByKey, setTeamColorByKey] = useState<Map<string, TeamColor>>(
-        new Map()
-    );
+    const [teamColorByKey, setTeamColorByKey] = useState<Map<string, TeamColor>>(new Map());
 
     // ✅ FILTRI UI
     const [selectedRole, setSelectedRole] = useState<string>(""); // "" = tutti
@@ -183,16 +197,10 @@ export default function SvincolatiPage() {
     const [notes, setNotes] = useState<Record<number, string>>({});
     const [notesLoading, setNotesLoading] = useState(false);
     const [savingByKey, setSavingByKey] = useState<Record<number, boolean>>({});
-    const [savedTickByKey, setSavedTickByKey] = useState<Record<number, boolean>>(
-        {}
-    );
+    const [savedTickByKey, setSavedTickByKey] = useState<Record<number, boolean>>({});
 
-    // ✅ timer tick salvato
-    const saveTickTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>(
-        {}
-    );
+    const saveTickTimers = useRef<Record<number, ReturnType<typeof setTimeout>>>({});
 
-    // ✅ deferred search (UI più fluida)
     const deferredSearchName = useDeferredValue(searchName);
 
     const getTeamColor = useCallback(
@@ -200,7 +208,6 @@ export default function SvincolatiPage() {
         [teamColorByKey]
     );
 
-    // ✅ set per lookup O(1)
     const svExtIdSet = useMemo(() => {
         const s = new Set<number>();
         for (const p of svPlayers) {
@@ -247,8 +254,7 @@ export default function SvincolatiPage() {
 
             setSavedTickByKey((prev) => ({ ...prev, [playerKey]: true }));
 
-            if (saveTickTimers.current[playerKey])
-                clearTimeout(saveTickTimers.current[playerKey]);
+            if (saveTickTimers.current[playerKey]) clearTimeout(saveTickTimers.current[playerKey]);
             saveTickTimers.current[playerKey] = setTimeout(() => {
                 setSavedTickByKey((prev) => ({ ...prev, [playerKey]: false }));
             }, 1200);
@@ -261,7 +267,7 @@ export default function SvincolatiPage() {
     useEffect(() => {
         loadNotes();
 
-        const timers = saveTickTimers.current; // snapshot
+        const timers = saveTickTimers.current;
         return () => {
             for (const k of Object.keys(timers)) {
                 const id = timers[Number(k)];
@@ -370,22 +376,31 @@ export default function SvincolatiPage() {
         (file: File) => {
             Papa.parse<CsvRow>(file, {
                 header: true,
-                delimiter: ";",
+                // ✅ IMPORTANTISSIMO: autodetect delimiter (molti CSV svincolati sono "," e non ";")
+                delimiter: "",
                 skipEmptyLines: true,
-                transformHeader: (h) => h.trim(),
+                transformHeader: (h) => String(h ?? "").replace(/^\uFEFF/, "").trim(),
                 complete: (res) => {
-                    const rows = res.data.filter(Boolean);
+                    const rows = (res.data ?? []).filter(Boolean);
 
                     const players: SvincolatoPlayer[] = rows
-                        .filter((r) => isEmpty(r["Fuori lista"]))
+                        .filter((r) => isEmpty(r["Fuori lista"]) && isEmpty(r["FuoriLista"]) && isEmpty(r["Fuori_lista"]))
                         .map((r) => {
+                            // ✅ ruoli: supporta R, R., RUOLO, R CLASSIC ecc.
                             const roleMantra = readCsvField(r, [
                                 "R.MANTRA",
                                 "R MANTRA",
                                 "RMANTRA",
+                                "RUOLOMANTRA",
+                                "RUOLO MANTRA",
                             ]);
+
                             const roleClassic = readCsvField(r, [
                                 "R",
+                                "R.",
+                                "RUOLO",
+                                "RUOLOCLASSIC",
+                                "RUOLO CLASSIC",
                                 "R.CLASSIC",
                                 "R CLASSIC",
                                 "R.CLA",
@@ -393,28 +408,37 @@ export default function SvincolatiPage() {
                             ]);
 
                             const p: SvincolatoPlayer = {
-                                extId: Number(readCsvField(r, ["#", "Id", "ID"])),
-                                name: String(readCsvField(r, ["Nome", "Giocatore"]) ?? ""),
-                                team: String(
-                                    readCsvField(r, ["Sq.", "Squadra", "Squadra."]) ?? ""
+                                extId: Number(
+                                    readCsvField(r, ["#", "Id", "ID", "id", "Codice", "CODICE"])
                                 ),
-                                roleMantra: roleMantra != null ? String(roleMantra) : null,
-                                roleClassic: roleClassic != null ? String(roleClassic) : null,
-                                pg: toNum(readCsvField(r, ["PGv", "PG"])),
-                                mv: toNum(readCsvField(r, ["MV"])),
-                                fm: toNum(readCsvField(r, ["FM", "FMV"])),
+                                name: String(readCsvField(r, ["Nome", "Giocatore", "Calciatore"]) ?? ""),
+                                team: String(readCsvField(r, ["Sq.", "Sq", "Squadra", "Team", "Squadra."]) ?? ""),
+
+                                roleMantra: roleMantra != null ? String(roleMantra).trim() : null,
+                                roleClassic: roleClassic != null ? String(roleClassic).trim() : null,
+
+                                pg: toNum(readCsvField(r, ["PGv", "PG", "Pres", "Presenze"])),
+                                mv: toNum(readCsvField(r, ["MV", "M/V", "MediaVoto"])),
+                                fm: toNum(readCsvField(r, ["FM", "FMV", "FantaMedia", "Fantamedia"])),
                             };
                             return p;
                         })
                         .filter((p) => Number.isFinite(p.extId) && p.name.trim().length > 0);
 
-                    // ✅ se sono in Classic: tengo solo player con roleClassic valorizzato
+                    // ✅ in Classic tengo solo player con roleClassic valorizzato
                     const filtered =
                         mode === "CLASSIC"
-                            ? players.filter(
-                                (p) => String(p.roleClassic ?? "").trim().length > 0
-                            )
-                            : players;
+                            ? players.filter((p) => String(p.roleClassic ?? "").trim().length > 0)
+                            : players.filter((p) => String(p.roleMantra ?? "").trim().length > 0);
+
+                    if (mode === "CLASSIC" && filtered.length === 0) {
+                        // debug utilissimo: ti dice quali header ci sono davvero nel CSV
+                        // così se serve aggiungiamo un alias specifico
+                        // eslint-disable-next-line no-console
+                        console.warn("[SVINCOLATI] Classic: 0 giocatori dopo filtro. Headers CSV:", res.meta?.fields);
+                        // eslint-disable-next-line no-console
+                        console.warn("[SVINCOLATI] Esempio prima riga:", rows[0]);
+                    }
 
                     setSvPlayers(filtered);
                     recompute(filtered, selectedExtId, mode);
@@ -424,22 +448,6 @@ export default function SvincolatiPage() {
         [mode, recompute, selectedExtId]
     );
 
-    // ✅ quando cambia la modalità: riallinea la lista svincolati (Classic => solo roleClassic)
-    useEffect(() => {
-        setSvPlayers((prev) => {
-            const next =
-                mode === "CLASSIC"
-                    ? prev.filter((p) => String(p.roleClassic ?? "").trim().length > 0)
-                    : prev;
-
-            if (next.length !== prev.length) {
-                recompute(next, selectedExtId, mode);
-            }
-            return next;
-        });
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [mode]);
-
     useEffect(() => {
         if (svPlayers.length) recompute(svPlayers, selectedExtId, mode);
         // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -448,9 +456,7 @@ export default function SvincolatiPage() {
     const removeSvincolato = useCallback(
         (extIdToRemove: number) => {
             setSvPlayers((prev) => {
-                const next = prev.filter(
-                    (p) => Number(p.extId) !== Number(extIdToRemove)
-                );
+                const next = prev.filter((p) => Number(p.extId) !== Number(extIdToRemove));
                 recompute(next, selectedExtId, mode);
                 return next;
             });
@@ -463,27 +469,13 @@ export default function SvincolatiPage() {
         [deferredSearchName]
     );
 
-    // ✅ RUOLI: se l'API ha già mandato delle chiavi, usiamo QUELLE (sono la verità).
-    //     Questo evita "pagina vuota" quando in Classic l'API manda ancora ruoli Mantra.
-    const rolesUniverse = useMemo(() => {
-        const keys = Object.keys(byRole ?? {});
-        if (keys.length > 0) return keys.sort((a, b) => a.localeCompare(b, "it"));
-        return getRolesList(mode);
-    }, [byRole, mode]);
-
-    // ✅ se selectedRole non esiste più nei ruoli disponibili, lo resettiamo
-    useEffect(() => {
-        if (selectedRole && !rolesUniverse.includes(selectedRole)) {
-            setSelectedRole("");
-        }
-    }, [rolesUniverse, selectedRole]);
+    const rolesUniverse = useMemo(() => getRolesList(mode), [mode]);
 
     const availableRoles = useMemo(() => {
         const has = (r: string) => (byRole[r] ?? []).length > 0;
         return rolesUniverse.filter(has);
     }, [byRole, rolesUniverse]);
 
-    // ✅ base roles (prima del filtro nome)
     const baseRolesToShow = useMemo(() => {
         if (selectedRole) return [selectedRole];
 
@@ -494,16 +486,13 @@ export default function SvincolatiPage() {
         );
     }, [byRole, selectedExtId, selectedRole, rolesUniverse]);
 
-    // ✅ se cerco un nome: mostro SOLO i ruoli dove c'è almeno un match
     const rolesToShow = useMemo(() => {
         const base = baseRolesToShow;
         if (searchLower.length === 0) return base;
 
         return base.filter((role) => {
             const list = byRole[role] ?? [];
-            return list.some((p) =>
-                String(p.name ?? "").toLowerCase().includes(searchLower)
-            );
+            return list.some((p) => String(p.name ?? "").toLowerCase().includes(searchLower));
         });
     }, [baseRolesToShow, byRole, searchLower]);
 
@@ -528,9 +517,7 @@ export default function SvincolatiPage() {
                 <select
                     className="border px-2 py-1"
                     value={selectedExtId ?? ""}
-                    onChange={(e) =>
-                        setSelectedExtId(e.target.value ? Number(e.target.value) : null)
-                    }
+                    onChange={(e) => setSelectedExtId(e.target.value ? Number(e.target.value) : null)}
                 >
                     <option value="">(confronta con un tuo giocatore)</option>
                     {teamPlayers.map((p) => (
@@ -567,12 +554,16 @@ export default function SvincolatiPage() {
                         Svincolati caricati: <b>{svPlayers.length}</b>
                     </span>
                 )}
+
+                {svPlayers.length === 0 && (
+                    <span className="text-sm text-gray-500">
+                        (Carica un CSV per vedere i consigli)
+                    </span>
+                )}
             </div>
 
             {searchLower.length > 0 && rolesToShow.length === 0 && (
-                <div className="text-sm text-gray-500">
-                    Nessun risultato per la ricerca.
-                </div>
+                <div className="text-sm text-gray-500">Nessun risultato per la ricerca.</div>
             )}
 
             {rolesToShow.map((role) => {
@@ -582,9 +573,7 @@ export default function SvincolatiPage() {
                 const list =
                     searchLower.length === 0
                         ? rawList
-                        : rawList.filter((p) =>
-                            String(p.name ?? "").toLowerCase().includes(searchLower)
-                        );
+                        : rawList.filter((p) => String(p.name ?? "").toLowerCase().includes(searchLower));
 
                 if (!list.length) return null;
 
@@ -631,8 +620,7 @@ export default function SvincolatiPage() {
                                         }
 
                                         const isMe =
-                                            selectedExtId != null &&
-                                            Number(p.extId) === Number(selectedExtId);
+                                            selectedExtId != null && Number(p.extId) === Number(selectedExtId);
 
                                         const isFromCsv = svExtIdSet.has(Number(p.extId));
                                         const canDelete = isFromCsv && !isMe;
@@ -724,10 +712,7 @@ export default function SvincolatiPage() {
                                                             🗑️
                                                         </button>
                                                     ) : (
-                                                        <span
-                                                            className="text-gray-300"
-                                                            title={isMe ? "Giocatore selezionato" : ""}
-                                                        >
+                                                        <span className="text-gray-300" title={isMe ? "Giocatore selezionato" : ""}>
                                                             🗑️
                                                         </span>
                                                     )}
