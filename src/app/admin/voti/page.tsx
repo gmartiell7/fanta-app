@@ -44,6 +44,7 @@ function toFloat(v: unknown): number | null {
 }
 
 function normKey(k: string) {
+    // "Cod." -> "cod"
     return norm(k)
         .toLowerCase()
         .replace(/[’'`.]/g, "")
@@ -51,7 +52,7 @@ function normKey(k: string) {
         .replace(/[^a-z0-9#]/g, "");
 }
 
-/** split semplice (non perfetto come CSV parser, ma basta per trovare header + delimiter) */
+/** split semplice (solo per trovare header+delimiter) */
 function splitBySep(line: string, sep: string) {
     const out: string[] = [];
     let cur = "";
@@ -81,27 +82,11 @@ function splitBySep(line: string, sep: string) {
     return out;
 }
 
-const ID_KEYS = [
-    "#",
-    "id",
-    "cod",
-    "codice",
-    "idgiocatore",
-    "idplayer",
-    "playerid",
-    "codgiocatore",
-];
+// ✅ nel tuo CSV l'ID è "Cod."
+const ID_KEYS = ["#", "id", "cod", "codice", "codgiocatore", "idgiocatore", "idplayer", "playerid"];
 
-const VOTE_KEYS = [
-    "voto",
-    "v",
-    "mv",
-    "votostatistico",
-    "votost",
-    "votofg",
-    "votogazzetta",
-    "votopagella",
-];
+// ✅ nel tuo CSV il voto è "Voto"
+const VOTE_KEYS = ["voto", "v", "mv", "votostatistico", "votost", "votofg", "votogazzetta", "votopagella"];
 
 const INT_KEYS = {
     gf: ["gf", "golfatti", "gol"],
@@ -131,7 +116,7 @@ function getFieldNorm(r: Record<string, unknown>, keys: string[]) {
     return undefined;
 }
 
-/** trova la riga header e il separatore più plausibile */
+/** trova riga header e delimiter plausibile */
 function findHeaderAndDelimiter(text: string) {
     const lines = text.split(/\r?\n/).map((l) => l.replace(/\r/g, ""));
     const seps = [";", ",", "\t"];
@@ -152,14 +137,12 @@ function findHeaderAndDelimiter(text: string) {
             }
         }
     }
-
     return null;
 }
 
 export default function AdminPage() {
     const { data: session, status } = useSession();
     const [file, setFile] = useState<File | null>(null);
-
     const [matchday, setMatchday] = useState<number>(1);
 
     const [loadedDays, setLoadedDays] = useState<number[]>([]);
@@ -198,18 +181,20 @@ export default function AdminPage() {
 
             if (!found) {
                 throw new Error(
-                    "Header non trovato nel CSV voti.\nMi aspetto una colonna ID (Id/#/Codice) e una colonna Voto (Voto/V/MV)."
+                    "Header non trovato nel CSV voti.\nMi aspetto una colonna ID (Cod./Id/#) e una colonna Voto (Voto/V/MV)."
                 );
             }
 
             const { headerIndex, delimiter, lines } = found;
+
+            // ✅ scarta tutto prima dell’header (nel tuo CSV ci sono righe di testo + nome squadra)
             const sliced = lines.slice(headerIndex).join("\n");
 
             const parsedRows = await new Promise<UploadRow[]>((resolve, reject) => {
                 Papa.parse<CsvRow>(sliced, {
                     header: true,
                     skipEmptyLines: true,
-                    delimiter, // ✅ quello trovato
+                    delimiter,
                     transformHeader: (h) => h.trim(),
                     complete: (res) => {
                         const rows = (res.data ?? []).filter(Boolean);
@@ -226,8 +211,7 @@ export default function AdminPage() {
                                 const voteRaw = voteRawVal != null ? String(voteRawVal) : null;
                                 const vote = toFloat(voteRawVal);
 
-                                // ⚠️ accetto anche righe senza voto (es. SV): le carico come vote=null (decidi tu)
-                                const row: UploadRow = {
+                                return {
                                     playerExtId: extId,
                                     voteRaw,
                                     vote: vote == null ? null : vote,
@@ -241,19 +225,18 @@ export default function AdminPage() {
                                     esp: toInt(getFieldNorm(r, INT_KEYS.esp)) ?? 0,
                                     ass: toInt(getFieldNorm(r, INT_KEYS.ass)) ?? 0,
                                 };
-
-                                return row;
                             })
                             .filter((x): x is UploadRow => x !== null);
 
                         if (!out.length) {
-                            reject(new Error("CSV non valido: nessuna riga con ID giocatore valido."));
+                            reject(new Error("CSV non valido: nessuna riga con Cod./Id valido."));
                             return;
                         }
 
                         resolve(out);
                     },
-                    error: (err) => reject(err),
+                    // ✅ FIX TS: niente implicit any
+                    error: (err: unknown) => reject(err),
                 });
             });
 
