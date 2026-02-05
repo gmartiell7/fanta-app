@@ -432,7 +432,7 @@ function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: GameMode }) {
             { key: "DEF", label: "Difesa", items: g.DEF },
             { key: "GK", label: "Portiere", items: g.GK },
         ].filter((x) => x.items.length > 0);
-    }, [lineup]);
+    }, [lineup,mode]);
 
     return (
         <div className="relative overflow-hidden rounded-3xl border border-slate-200 shadow-sm">
