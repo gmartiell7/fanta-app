@@ -6,6 +6,9 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+// (opzionale ma consigliato su Vercel: più tempo per upload grossi)
+// export const maxDuration = 60;
+
 function jsonErr(message: string, status = 400, extra?: Record<string, unknown>) {
     return NextResponse.json({ ok: false, error: message, ...(extra ?? {}) }, { status });
 }
@@ -19,153 +22,152 @@ function isAdminEmail(email: string | null | undefined) {
         .split(",")
         .map((s) => s.trim().toLowerCase())
         .filter(Boolean);
-    return admins.includes(String(email).toLowerCase());
+    return admins.includes(email.toLowerCase());
 }
 
 type Row = {
     playerExtId: number;
     voteRaw?: string | null;
     vote?: number | null;
-
-    gf?: number | string | null;
-    gs?: number | string | null;
-    rp?: number | string | null;
-    rs?: number | string | null;
-    rf?: number | string | null;
-    au?: number | string | null;
-    amm?: number | string | null;
-    esp?: number | string | null;
-    ass?: number | string | null;
+    gf?: number;
+    gs?: number;
+    rp?: number;
+    rs?: number;
+    rf?: number;
+    au?: number;
+    amm?: number;
+    esp?: number;
+    ass?: number;
 };
-
-function toIntSafe(v: unknown, fallback = 0) {
-    if (v === null || v === undefined) return fallback;
-    const s = String(v).trim();
-    if (!s) return fallback;
-    const n = Number(s.replace(",", "."));
-    return Number.isFinite(n) ? Math.trunc(n) : fallback;
-}
-
-function toFloatOrNull(v: unknown) {
-    if (v === null || v === undefined) return null;
-    const s = String(v).trim();
-    if (!s) return null;
-    const n = Number(s.replace(",", "."));
-    return Number.isFinite(n) ? n : null;
-}
 
 function toInt(v: unknown) {
     const n = Number(v);
     return Number.isFinite(n) ? Math.trunc(n) : NaN;
 }
 
+function toNumOrNull(v: unknown): number | null {
+    if (v === null || v === undefined) return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+}
+
 export async function POST(req: NextRequest) {
+    const session = await getServerSession(authOptions);
+    const email = session?.user?.email ?? null;
+
+    if (!session || !isAdminEmail(email)) {
+        return jsonErr("Non autorizzato", 403, { email });
+    }
+
+    let body: any;
     try {
-        const session = await getServerSession(authOptions);
-        const email = session?.user?.email ?? null;
+        body = await req.json();
+    } catch {
+        return jsonErr("JSON non valido", 400);
+    }
 
-        if (!session || !isAdminEmail(email)) {
-            return jsonErr("Non autorizzato", 403, { email });
-        }
+    const matchday = toInt(body?.matchday);
+    const rows = Array.isArray(body?.rows) ? (body.rows as Row[]) : null;
 
-        let body: any;
-        try {
-            body = await req.json();
-        } catch {
-            return jsonErr("JSON non valido", 400);
-        }
+    if (!Number.isFinite(matchday) || matchday <= 0) {
+        return jsonErr("matchday non valido (intero > 0)", 400);
+    }
+    if (!rows || rows.length === 0) {
+        return jsonErr("rows mancante o vuoto", 400);
+    }
 
-        const matchday = toInt(body?.matchday);
-        const rows = Array.isArray(body?.rows) ? (body.rows as Row[]) : null;
+    // ✅ extIds unici validi
+    const extIds = Array.from(
+        new Set(
+            rows
+                .map((r) => toInt(r?.playerExtId))
+                .filter((n) => Number.isFinite(n) && n > 0)
+        )
+    ) as number[];
 
-        if (!Number.isFinite(matchday) || matchday <= 0) {
-            return jsonErr("matchday non valido (intero > 0)", 400, { matchday: body?.matchday });
-        }
-        if (!rows || rows.length === 0) {
-            return jsonErr("rows mancante o vuoto", 400);
-        }
+    if (!extIds.length) {
+        return jsonErr("Nessun playerExtId valido nelle rows", 400);
+    }
 
-        // ✅ extIds validi
-        const extIds = Array.from(
-            new Set(
-                rows
-                    .map((r) => toInt(r?.playerExtId))
-                    .filter((n) => Number.isFinite(n) && n > 0)
-            )
-        ) as number[];
+    // ✅ Mappa extId -> playerId
+    const players = await prisma.player.findMany({
+        where: { extId: { in: extIds } },
+        select: { id: true, extId: true },
+    });
 
-        if (!extIds.length) {
-            return jsonErr("Nessun playerExtId valido nelle rows", 400);
-        }
+    const extToId = new Map(players.map((p) => [p.extId, p.id]));
+    const missingExtIds = extIds.filter((x) => !extToId.has(x));
 
-        const players = await prisma.player.findMany({
-            where: { extId: { in: extIds } },
-            select: { id: true, extId: true },
+    // ✅ prepara righe "pulite" (solo quelle con playerId esistente)
+    const dataToInsert = rows
+        .map((r) => {
+            const extId = toInt(r?.playerExtId);
+            if (!Number.isFinite(extId) || extId <= 0) return null;
+
+            const playerId = extToId.get(extId);
+            if (!playerId) return null;
+
+            return {
+                playerId,
+                matchday,
+                voteRaw: r.voteRaw ?? null,
+                vote: toNumOrNull(r.vote),
+                gf: toInt(r.gf ?? 0) || 0,
+                gs: toInt(r.gs ?? 0) || 0,
+                rp: toInt(r.rp ?? 0) || 0,
+                rs: toInt(r.rs ?? 0) || 0,
+                rf: toInt(r.rf ?? 0) || 0,
+                au: toInt(r.au ?? 0) || 0,
+                amm: toInt(r.amm ?? 0) || 0,
+                esp: toInt(r.esp ?? 0) || 0,
+                ass: toInt(r.ass ?? 0) || 0,
+            };
+        })
+        .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    if (!dataToInsert.length) {
+        return jsonErr("Nessuna riga valida: tutti gli extId risultano mancanti nel listone Player", 400, {
+            received: rows.length,
+            playersFound: players.length,
+            missingExtIdsCount: missingExtIds.length,
+            missingExtIds: missingExtIds.slice(0, 50),
         });
+    }
 
-        const extToId = new Map(players.map((p) => [p.extId, p.id]));
-        const missingExtIds = extIds.filter((x) => !extToId.has(x));
+    // ✅ FIX SERVERLESS: niente interactive transaction
+    // Strategia idempotente: cancello i voti di quei player per quel matchday e reinserisco tutto
+    const playerIds = Array.from(new Set(dataToInsert.map((x) => x.playerId)));
 
-        let upserted = 0;
-        let skipped = 0;
+    try {
+        const [delRes, createRes] = await prisma.$transaction([
+            prisma.matchdayStat.deleteMany({
+                where: {
+                    matchday,
+                    playerId: { in: playerIds },
+                },
+            }),
+            prisma.matchdayStat.createMany({
+                data: dataToInsert,
+                // non dovrebbe servire (perché abbiamo cancellato), ma è una safety extra
+                skipDuplicates: true,
+            }),
+        ]);
 
-        // ✅ transazione unica (ok). Se dovesse essere lenta, si può chunkare dopo.
-        await prisma.$transaction(async (tx) => {
-            for (const r of rows) {
-                const extId = toInt(r?.playerExtId);
-                if (!Number.isFinite(extId) || extId <= 0) {
-                    skipped++;
-                    continue;
-                }
-
-                const playerId = extToId.get(extId);
-                if (!playerId) {
-                    skipped++;
-                    continue;
-                }
-
-                const voteRaw = r.voteRaw == null ? null : String(r.voteRaw);
-                const vote = toFloatOrNull(r.vote);
-
-                const data = {
-                    voteRaw,
-                    vote,
-
-                    gf: toIntSafe(r.gf, 0),
-                    gs: toIntSafe(r.gs, 0),
-                    rp: toIntSafe(r.rp, 0),
-                    rs: toIntSafe(r.rs, 0),
-                    rf: toIntSafe(r.rf, 0),
-                    au: toIntSafe(r.au, 0),
-                    amm: toIntSafe(r.amm, 0),
-                    esp: toIntSafe(r.esp, 0),
-                    ass: toIntSafe(r.ass, 0),
-                };
-
-                await tx.matchdayStat.upsert({
-                    where: {
-                        playerId_matchday: { playerId, matchday },
-                    },
-                    create: { playerId, matchday, ...data },
-                    update: { ...data },
-                });
-
-                upserted++;
-            }
-        });
+        const skipped = rows.length - dataToInsert.length;
 
         return jsonOk({
             matchday,
             received: rows.length,
-            upserted,
+            deleted: delRes.count,
+            inserted: createRes.count,
+            upserted: createRes.count, // compatibilità con UI vecchia
             skipped,
             playersFound: players.length,
             missingExtIdsCount: missingExtIds.length,
             missingExtIds: missingExtIds.slice(0, 50),
         });
     } catch (e: unknown) {
-        // ✅ così dal client vedrai il vero motivo del 500
-        const message = e instanceof Error ? e.message : "Errore server";
-        return jsonErr("Errore interno upload voti", 500, { message });
+        const msg = e instanceof Error ? e.message : "Errore Prisma";
+        return jsonErr("Errore interno upload voti", 500, { message: msg });
     }
 }
