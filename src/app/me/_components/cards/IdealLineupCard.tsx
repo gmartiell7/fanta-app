@@ -10,7 +10,7 @@ export default function IdealLineupCard() {
             </CardHeader>
             <CardContent className="space-y-4">
                 <p className="text-sm text-muted-foreground">
-                    Scopri qual è la formazione ideale da inserire basandoci sulle statistiche dei tuoi giocatori.
+                    Scopri qual Ã¨ la formazione ideale da inserire basandoci sulle statistiche dei tuoi giocatori.
                 </p>
 
                 <Button asChild variant="secondary" className="rounded-xl">
