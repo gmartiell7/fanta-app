@@ -144,11 +144,6 @@ function playerMatchesAnyRole(playerRoles: string[], allowed: string[]) {
     return allowed.some((r) => set.has(normRole(r)));
 }
 
-/**
- * Calcola la tabella score "unificata" per un gruppo di ruoli (es. ["A","Pc"]):
- * pool = tutti i giocatori che hanno almeno uno dei ruoli del gruppo
- * ranking/duelli calcolati su quel pool unico
- */
 function computeScoreForRoleGroup(items: ScoreItems[], allowedRoles: string[], totalMatchdays: number) {
     const pool = items
         .filter((it) => playerMatchesAnyRole(it.roles, allowedRoles))
@@ -259,12 +254,12 @@ export function computeTopFlopScoresByRole(players: PlayerFromDB[], mode: GameMo
         scoreByRole.set(role, byId);
     }
 
-    // ✅ ritorniamo anche items così pickBestLineup può costruire graduatorie unificate per i multi-ruoli
     return { scoreByRole, totalMatchdays, items };
 }
 
 export type LineupItem = {
     slot: string;
+    slotIndex: number; // ✅ identifica lo “slot duplicato” (es: A/Pc #9 e A/Pc #10)
     player: PlayerFromDB;
     usedRole: string;
     score: number;
@@ -274,6 +269,55 @@ export type PickBestLineupResult =
     | { selectable: true; lineup: LineupItem[] }
     | { selectable: false; lineup: LineupItem[] };
 
+function pickPreferredRole(compat: string[], mode: GameMode) {
+    if (compat.length === 0) return "";
+    let usedRole = compat[0];
+    if (compat.length > 1 && mode === "MANTRA") {
+        const preferOrder = ["Pc", "A", "T", "W", "C", "M", "E", "Dc", "Dd", "Ds", "Por"];
+        for (const pref of preferOrder) {
+            if (compat.includes(pref)) {
+                usedRole = pref;
+                break;
+            }
+        }
+    }
+    return usedRole;
+}
+
+function buildScoreResolver(
+    players: PlayerFromDB[],
+    scoreByRole: Map<string, Map<string, number>>,
+    mode: GameMode,
+    extra?: { items: ScoreItems[]; totalMatchdays: number }
+) {
+    const playerRoles = new Map<string, string[]>();
+    for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
+
+    const groupScoreCache = new Map<string, Map<string, number>>();
+
+    function getScoreMapForSlot(allowedRolesRaw: string[]) {
+        const allowed = [...new Set(allowedRolesRaw.map(normRole))].filter(Boolean);
+
+        if (allowed.length === 1) return scoreByRole.get(allowed[0]) ?? new Map<string, number>();
+
+        const k = keyForRoleGroup(allowed);
+        const cached = groupScoreCache.get(k);
+        if (cached) return cached;
+
+        const computed = extra ? computeScoreForRoleGroup(extra.items, allowed, extra.totalMatchdays) : new Map<string, number>();
+        groupScoreCache.set(k, computed);
+        return computed;
+    }
+
+    function getCompatibleRoles(p: PlayerFromDB, allowedRolesRaw: string[]) {
+        const roles = playerRoles.get(p.id) ?? [];
+        const allowed = allowedRolesRaw.map(normRole);
+        return allowed.filter((r) => roles.includes(r));
+    }
+
+    return { playerRoles, getScoreMapForSlot, getCompatibleRoles };
+}
+
 export function pickBestLineup(
     players: PlayerFromDB[],
     scoreByRole: Map<string, Map<string, number>>,
@@ -281,32 +325,9 @@ export function pickBestLineup(
     mode: GameMode,
     extra?: { items: ScoreItems[]; totalMatchdays: number }
 ): PickBestLineupResult {
-    const playerRoles = new Map<string, string[]>();
-    for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
+    const { getScoreMapForSlot, getCompatibleRoles } = buildScoreResolver(players, scoreByRole, mode, extra);
 
-    // ✅ cache per gruppi (es: "A|Pc"): due slot identici NON ricalcolano due volte
-    const groupScoreCache = new Map<string, Map<string, number>>();
-
-    function getScoreMapForSlot(allowedRolesRaw: string[]) {
-        const allowed = [...new Set(allowedRolesRaw.map(normRole))].filter(Boolean);
-
-        // mono-ruolo: usa scoreByRole classico
-        if (allowed.length === 1) return scoreByRole.get(allowed[0]) ?? new Map<string, number>();
-
-        // multi-ruolo: graduatoria unificata sul pool allowed
-        const k = keyForRoleGroup(allowed);
-        const cached = groupScoreCache.get(k);
-        if (cached) return cached;
-
-        const computed = extra
-            ? computeScoreForRoleGroup(extra.items, allowed, extra.totalMatchdays)
-            : new Map<string, number>();
-
-        groupScoreCache.set(k, computed);
-        return computed;
-    }
-
-    // selezionabilità: ogni slot deve avere almeno 1 candidato nel suo pool (mono o multi)
+    // selezionabilità
     for (const slot of module.slots) {
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
@@ -316,7 +337,8 @@ export function pickBestLineup(
     const used = new Set<string>();
     const lineup: LineupItem[] = [];
 
-    for (const slot of module.slots) {
+    for (let slotIndex = 0; slotIndex < module.slots.length; slotIndex++) {
+        const slot = module.slots[slotIndex];
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
 
@@ -325,26 +347,132 @@ export function pickBestLineup(
         for (const p of players) {
             if (used.has(p.id)) continue;
 
-            const roles = playerRoles.get(p.id) ?? [];
-            if (!playerMatchesAnyRole(roles, allowedRoles)) continue;
+            const compat = getCompatibleRoles(p, allowedRoles);
+            if (compat.length === 0) continue;
 
             const sc = scoreMap.get(p.id);
             if (sc === undefined) continue;
 
-            // usedRole: solo estetica label, scegliamo il primo compatibile
-            const compat = allowedRoles.map(normRole).filter((r) => roles.includes(r));
-            const usedRole = compat[0] ?? normRole(allowedRoles[0] ?? "");
-
+            const usedRole = pickPreferredRole(compat, mode);
             if (!best || sc > best.score) best = { p, usedRole, score: sc };
         }
 
         if (!best) return { selectable: false, lineup: [] };
 
         used.add(best.p.id);
-        lineup.push({ slot, player: best.p, usedRole: best.usedRole, score: best.score });
+        lineup.push({ slot, slotIndex, player: best.p, usedRole: best.usedRole, score: best.score });
     }
 
     return { selectable: true as const, lineup };
+}
+
+/**
+ * WHAT-IF: forza un giocatore in uno specifico slotIndex del modulo,
+ * poi completa gli altri slot con la stessa logica greedy.
+ */
+export function pickBestLineupWhatIf(
+    players: PlayerFromDB[],
+    scoreByRole: Map<string, Map<string, number>>,
+    module: ModuleDef,
+    mode: GameMode,
+    lock: { slotIndex: number; playerId: string },
+    extra?: { items: ScoreItems[]; totalMatchdays: number }
+): PickBestLineupResult {
+    const { getScoreMapForSlot, getCompatibleRoles } = buildScoreResolver(players, scoreByRole, mode, extra);
+
+    // selezionabilità: ogni slot deve avere candidati
+    for (const slot of module.slots) {
+        const allowedRoles = expandRoleToken(slot);
+        const scoreMap = getScoreMapForSlot(allowedRoles);
+        if (scoreMap.size === 0) return { selectable: false, lineup: [] };
+    }
+
+    const used = new Set<string>();
+    const lineup: LineupItem[] = [];
+
+    for (let slotIndex = 0; slotIndex < module.slots.length; slotIndex++) {
+        const slot = module.slots[slotIndex];
+        const allowedRoles = expandRoleToken(slot);
+        const scoreMap = getScoreMapForSlot(allowedRoles);
+
+        // slot “bloccato”
+        if (slotIndex === lock.slotIndex) {
+            const forced = players.find((p) => p.id === lock.playerId);
+            if (!forced) return { selectable: false, lineup: [] };
+            if (used.has(forced.id)) return { selectable: false, lineup: [] };
+
+            const compat = getCompatibleRoles(forced, allowedRoles);
+            if (compat.length === 0) return { selectable: false, lineup: [] };
+
+            const sc = scoreMap.get(forced.id);
+            if (sc === undefined) return { selectable: false, lineup: [] };
+
+            const usedRole = pickPreferredRole(compat, mode);
+            used.add(forced.id);
+            lineup.push({ slot, slotIndex, player: forced, usedRole, score: sc });
+            continue;
+        }
+
+        let best: { p: PlayerFromDB; usedRole: string; score: number } | null = null;
+
+        for (const p of players) {
+            if (used.has(p.id)) continue;
+
+            const compat = getCompatibleRoles(p, allowedRoles);
+            if (compat.length === 0) continue;
+
+            const sc = scoreMap.get(p.id);
+            if (sc === undefined) continue;
+
+            const usedRole = pickPreferredRole(compat, mode);
+            if (!best || sc > best.score) best = { p, usedRole, score: sc };
+        }
+
+        if (!best) return { selectable: false, lineup: [] };
+
+        used.add(best.p.id);
+        lineup.push({ slot, slotIndex, player: best.p, usedRole: best.usedRole, score: best.score });
+    }
+
+    return { selectable: true as const, lineup };
+}
+
+export type SlotRankingRow = {
+    player: PlayerFromDB;
+    score: number;
+    matchedRoles: string[];
+};
+
+export function getSlotRanking(
+    players: PlayerFromDB[],
+    scoreByRole: Map<string, Map<string, number>>,
+    slot: string,
+    mode: GameMode,
+    extra?: { items: ScoreItems[]; totalMatchdays: number }
+): SlotRankingRow[] {
+    const allowedRoles = expandRoleToken(slot).map(normRole).filter(Boolean);
+    const allowedUnique = [...new Set(allowedRoles)];
+
+    const { getScoreMapForSlot } = buildScoreResolver(players, scoreByRole, mode, extra);
+    const scoreMap = getScoreMapForSlot(allowedUnique);
+
+    const playerRoles = new Map<string, string[]>();
+    for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
+
+    const rows: SlotRankingRow[] = [];
+    for (const p of players) {
+        const roles = playerRoles.get(p.id) ?? [];
+        const matched = allowedUnique.filter((r) => roles.includes(r));
+        if (matched.length === 0) continue;
+
+        const sc = scoreMap.get(p.id);
+        if (sc === undefined) continue;
+
+        rows.push({ player: p, score: sc, matchedRoles: matched });
+    }
+
+    rows.sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name));
+    return rows;
 }
 
 export function getLineGroup(slot: string, mode: GameMode) {

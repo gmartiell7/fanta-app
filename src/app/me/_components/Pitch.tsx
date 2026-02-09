@@ -11,26 +11,29 @@ function PlayerChip({
     name,
     team,
     score,
+    selected,
+    onClick,
 }: {
     slot: string;
     usedRole: string;
     name: string;
     team: string;
     score: number;
+    selected?: boolean;
+    onClick?: () => void;
 }) {
     return (
-        <div
-            className="
-        w-full max-w-[240px]
-        rounded-2xl
-        bg-white/10 backdrop-blur
-        border border-white/15
-        px-3 py-2
-        shadow-sm
-        transition-transform duration-200
-        hover:scale-[1.02]
-        active:scale-[0.99]
-      "
+        <button
+            type="button"
+            onClick={onClick}
+            className={[
+                "w-full max-w-[240px] text-left",
+                "rounded-2xl bg-white/10 backdrop-blur border border-white/15",
+                "px-3 py-2 shadow-sm",
+                "transition-transform duration-200 hover:scale-[1.02] active:scale-[0.99]",
+                "focus:outline-none focus-visible:ring-2 focus-visible:ring-white/70",
+                selected ? "ring-2 ring-white/80" : "",
+            ].join(" ")}
             title={`${name} (${team})`}
         >
             <div className="flex items-center justify-between gap-2">
@@ -43,11 +46,21 @@ function PlayerChip({
             </div>
             <div className="mt-0.5 text-sm font-semibold text-white truncate">{name}</div>
             <div className="text-[11px] text-white/75 truncate">{team}</div>
-        </div>
+        </button>
     );
 }
 
-export default function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: GameMode }) {
+export default function Pitch({
+    lineup,
+    mode,
+    onPick,
+    selectedPlayerId,
+}: {
+    lineup: LineupItem[];
+    mode: GameMode;
+    onPick?: (it: LineupItem) => void;
+    selectedPlayerId?: string | null;
+}) {
     const grouped = useMemo(() => {
         const g: Record<string, typeof lineup> = { ATT: [], AM: [], MID: [], DEF: [], GK: [] };
         for (const x of lineup) {
@@ -87,13 +100,15 @@ export default function Pitch({ lineup, mode }: { lineup: LineupItem[]; mode: Ga
                         return (
                             <div key={line.key} className={rowClass}>
                                 {line.items.map((x, idx) => (
-                                    <div key={`${x.player.id}-${idx}-${x.slot}`} className={isMid ? "rotate-180" : ""}>
+                                    <div key={`${x.player.id}-${idx}-${x.slot}-${x.slotIndex}`} className={isMid ? "rotate-180" : ""}>
                                         <PlayerChip
                                             slot={x.slot}
                                             usedRole={x.usedRole}
                                             name={x.player.name}
                                             team={x.player.team}
                                             score={x.score}
+                                            selected={Boolean(selectedPlayerId && selectedPlayerId === x.player.id)}
+                                            onClick={() => onPick?.(x)}
                                         />
                                     </div>
                                 ))}
