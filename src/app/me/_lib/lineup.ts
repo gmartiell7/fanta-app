@@ -284,8 +284,8 @@ export function pickBestLineup(
 }
 
 export function getLineGroup(slot: string, mode: GameMode) {
-    const roles = expandRoleToken(slot);
-    const has = (r: string) => roles.includes(r);
+    const roles = expandRoleToken(slot).map(normRole); // ✅ normalizza sicuro
+    const has = (r: string) => roles.includes(normRole(r));
 
     if (mode === "CLASSIC") {
         if (has("P")) return "GK";
@@ -301,6 +301,6 @@ export function getLineGroup(slot: string, mode: GameMode) {
     if (has("E")) return "MID";
     if (has("M") || has("C")) return "MID";
     if (has("T")) return "AM";
-    if (has("A") || has("Pc")) return "ATT";
+    if (has("A") || has("Pc") || has("PC")) return "ATT"; // ✅ include Pc anche in varianti
     return "MID";
 }
