@@ -133,8 +133,54 @@ function hasBonusLast5(row: Row, totalMatchdays: number) {
     return true;
 }
 
+type ScoreItems = { row: Row; roles: string[] };
+
+function keyForRoleGroup(roles: string[]) {
+    return [...new Set(roles.map(normRole))].filter(Boolean).sort().join("|");
+}
+
+function playerMatchesAnyRole(playerRoles: string[], allowed: string[]) {
+    const set = new Set(playerRoles.map(normRole));
+    return allowed.some((r) => set.has(normRole(r)));
+}
+
+/**
+ * Calcola la tabella score "unificata" per un gruppo di ruoli (es. ["A","Pc"]):
+ * pool = tutti i giocatori che hanno almeno uno dei ruoli del gruppo
+ * ranking/duelli calcolati su quel pool unico
+ */
+function computeScoreForRoleGroup(items: ScoreItems[], allowedRoles: string[], totalMatchdays: number) {
+    const pool = items
+        .filter((it) => playerMatchesAnyRole(it.roles, allowedRoles))
+        .map((it) => it.row);
+
+    if (pool.length === 0) return new Map<string, number>();
+
+    const duelVote = computeDuelTotals(pool, totalMatchdays, (r, day) => r.voteByDay[day] ?? 0);
+    const duelFmv = computeDuelTotals(pool, totalMatchdays, (r, day) => r.fmvByDay[day] ?? 0);
+
+    const mvPtById = computeRankPtMap(pool, (r) => r.mv);
+    const fmvPtById = computeRankPtMap(pool, (r) => r.fmv);
+    const duelVotePtById = computeRankPtMapFromScored(duelVote);
+    const duelFmvPtById = computeRankPtMapFromScored(duelFmv);
+
+    const byId = new Map<string, number>();
+    for (const r of pool) {
+        const base =
+            (mvPtById.get(r.id) ?? 0) +
+            (fmvPtById.get(r.id) ?? 0) +
+            (duelVotePtById.get(r.id) ?? 0) +
+            (duelFmvPtById.get(r.id) ?? 0);
+
+        const bonus = hasBonusLast5(r, totalMatchdays);
+        byId.set(r.id, bonus ? base * 1.5 : base);
+    }
+
+    return byId;
+}
+
 export function computeTopFlopScoresByRole(players: PlayerFromDB[], mode: GameMode) {
-    const items = players.map((p) => {
+    const items: ScoreItems[] = players.map((p) => {
         const roles = splitRoles(roleStringForMode(p, mode)).map(normRole);
 
         const stats: StatRow[] = (p.stats ?? []).map((s) => ({
@@ -207,14 +253,14 @@ export function computeTopFlopScoresByRole(players: PlayerFromDB[], mode: GameMo
                 (duelFmvPtById.get(r.id) ?? 0);
 
             const bonus = hasBonusLast5(r, totalMatchdays);
-            const total = bonus ? base * 1.5 : base;
-            byId.set(r.id, total);
+            byId.set(r.id, bonus ? base * 1.5 : base);
         }
 
         scoreByRole.set(role, byId);
     }
 
-    return { scoreByRole, totalMatchdays };
+    // ✅ ritorniamo anche items così pickBestLineup può costruire graduatorie unificate per i multi-ruoli
+    return { scoreByRole, totalMatchdays, items };
 }
 
 export type LineupItem = {
@@ -232,15 +278,39 @@ export function pickBestLineup(
     players: PlayerFromDB[],
     scoreByRole: Map<string, Map<string, number>>,
     module: ModuleDef,
-    mode: GameMode
+    mode: GameMode,
+    extra?: { items: ScoreItems[]; totalMatchdays: number }
 ): PickBestLineupResult {
     const playerRoles = new Map<string, string[]>();
     for (const p of players) playerRoles.set(p.id, splitRoles(roleStringForMode(p, mode)).map(normRole));
 
+    // ✅ cache per gruppi (es: "A|Pc"): due slot identici NON ricalcolano due volte
+    const groupScoreCache = new Map<string, Map<string, number>>();
+
+    function getScoreMapForSlot(allowedRolesRaw: string[]) {
+        const allowed = [...new Set(allowedRolesRaw.map(normRole))].filter(Boolean);
+
+        // mono-ruolo: usa scoreByRole classico
+        if (allowed.length === 1) return scoreByRole.get(allowed[0]) ?? new Map<string, number>();
+
+        // multi-ruolo: graduatoria unificata sul pool allowed
+        const k = keyForRoleGroup(allowed);
+        const cached = groupScoreCache.get(k);
+        if (cached) return cached;
+
+        const computed = extra
+            ? computeScoreForRoleGroup(extra.items, allowed, extra.totalMatchdays)
+            : new Map<string, number>();
+
+        groupScoreCache.set(k, computed);
+        return computed;
+    }
+
+    // selezionabilità: ogni slot deve avere almeno 1 candidato nel suo pool (mono o multi)
     for (const slot of module.slots) {
-        const allowed = expandRoleToken(slot);
-        const roleExists = allowed.some((r) => scoreByRole.has(r));
-        if (!roleExists) return { selectable: false, lineup: [] };
+        const allowedRoles = expandRoleToken(slot);
+        const scoreMap = getScoreMapForSlot(allowedRoles);
+        if (scoreMap.size === 0) return { selectable: false, lineup: [] };
     }
 
     const used = new Set<string>();
@@ -248,6 +318,7 @@ export function pickBestLineup(
 
     for (const slot of module.slots) {
         const allowedRoles = expandRoleToken(slot);
+        const scoreMap = getScoreMapForSlot(allowedRoles);
 
         let best: { p: PlayerFromDB; usedRole: string; score: number } | null = null;
 
@@ -255,23 +326,16 @@ export function pickBestLineup(
             if (used.has(p.id)) continue;
 
             const roles = playerRoles.get(p.id) ?? [];
-            const compatibleRoles = allowedRoles.filter((r) => roles.includes(r));
-            if (compatibleRoles.length === 0) continue;
+            if (!playerMatchesAnyRole(roles, allowedRoles)) continue;
 
-            let bestScoreForP = -Infinity;
-            let bestRoleForP = compatibleRoles[0];
+            const sc = scoreMap.get(p.id);
+            if (sc === undefined) continue;
 
-            for (const r of compatibleRoles) {
-                const score = scoreByRole.get(r)?.get(p.id);
-                if (score === undefined) continue;
-                if (score > bestScoreForP) {
-                    bestScoreForP = score;
-                    bestRoleForP = r;
-                }
-            }
+            // usedRole: solo estetica label, scegliamo il primo compatibile
+            const compat = allowedRoles.map(normRole).filter((r) => roles.includes(r));
+            const usedRole = compat[0] ?? normRole(allowedRoles[0] ?? "");
 
-            if (bestScoreForP === -Infinity) continue;
-            if (!best || bestScoreForP > best.score) best = { p, usedRole: bestRoleForP, score: bestScoreForP };
+            if (!best || sc > best.score) best = { p, usedRole, score: sc };
         }
 
         if (!best) return { selectable: false, lineup: [] };
@@ -284,7 +348,7 @@ export function pickBestLineup(
 }
 
 export function getLineGroup(slot: string, mode: GameMode) {
-    const roles = expandRoleToken(slot).map(normRole); // ✅ normalizza sicuro
+    const roles = expandRoleToken(slot).map(normRole);
     const has = (r: string) => roles.includes(normRole(r));
 
     if (mode === "CLASSIC") {
@@ -301,6 +365,6 @@ export function getLineGroup(slot: string, mode: GameMode) {
     if (has("E")) return "MID";
     if (has("M") || has("C")) return "MID";
     if (has("T")) return "AM";
-    if (has("A") || has("Pc") || has("PC")) return "ATT"; // ✅ include Pc anche in varianti
+    if (has("A") || has("Pc")) return "ATT";
     return "MID";
 }

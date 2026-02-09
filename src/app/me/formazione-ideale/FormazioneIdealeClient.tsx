@@ -57,13 +57,14 @@ export default function FormazioneIdealeClient({
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [mode]);
 
-    const { scoreByRole } = useMemo(() => computeTopFlopScoresByRole(players, mode), [players, mode]);
+    const { scoreByRole, items, totalMatchdays } = useMemo(() => computeTopFlopScoresByRole(players, mode), [players, mode]);
+
     const moduleDef = useMemo(() => moduleDefs.find((m) => m.name === moduleName) ?? moduleDefs[0], [moduleDefs, moduleName]);
 
     const ideal = useMemo(() => {
         if (!moduleDef) return { selectable: false as const, lineup: [] };
-        return pickBestLineup(players, scoreByRole, moduleDef, mode);
-    }, [players, scoreByRole, moduleDef, mode]);
+        return pickBestLineup(players, scoreByRole, moduleDef, mode, { items, totalMatchdays });
+    }, [players, scoreByRole, moduleDef, mode, items, totalMatchdays]);
 
     // piccolo hint se lista vuota
     useEffect(() => {
