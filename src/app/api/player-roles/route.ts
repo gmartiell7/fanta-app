@@ -5,9 +5,11 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
 type Mode = "MANTRA" | "CLASSIC";
 
-function normalizeMode(v: string | null): Mode {
+function normalizeMode(v: string | null): Mode | null {
     const s = String(v ?? "").trim().toUpperCase();
-    return s === "CLASSIC" ? "CLASSIC" : "MANTRA";
+    if (s === "CLASSIC") return "CLASSIC";
+    if (s === "MANTRA") return "MANTRA";
+    return null;
 }
 
 function splitRoles(roleMantra: string) {
@@ -19,12 +21,26 @@ function splitRoles(roleMantra: string) {
 
 export async function GET(req: Request) {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) {
+    const email = session?.user?.email ?? null;
+    if (!email) {
         return NextResponse.json({ error: "Non autenticato" }, { status: 401 });
     }
 
     const { searchParams } = new URL(req.url);
-    const mode = normalizeMode(searchParams.get("mode"));
+
+    // ✅ se mode è passato in query, lo rispettiamo, altrimenti usiamo quello dell’utente
+    const modeFromQuery = normalizeMode(searchParams.get("mode"));
+
+    let mode: Mode;
+    if (modeFromQuery) {
+        mode = modeFromQuery;
+    } else {
+        const user = await prisma.user.findUnique({
+            where: { email },
+            select: { gameMode: true },
+        });
+        mode = user?.gameMode === "CLASSIC" ? "CLASSIC" : "MANTRA";
+    }
 
     // ✅ CLASSIC: ruoli fissi
     if (mode === "CLASSIC") {

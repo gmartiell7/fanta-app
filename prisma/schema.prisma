@@ -17,6 +17,24 @@ enum GameMode {
   CLASSIC
 }
 
+// ✅ Nuovo: gruppi giocatore (per la tua select)
+enum PlayerGroup {
+  TOP
+  SEMITOP
+  JOLLY
+  OTTIMO_TITOLARE
+  BUON_TITOLARE
+  DA_VOTO
+  EVITABILE
+}
+
+// ✅ Nuovo: stato "sicuro / probabile / no"
+enum CertaintyLevel {
+  NONE
+  PROBABLE
+  SURE
+}
+
 model User {
   id            String   @id @default(cuid())
   email         String   @unique
@@ -51,6 +69,14 @@ model Player {
   team        String
   price       Int    @default(0)
 
+  // ✅ Nuovi campi per "listone avanzato"
+  group       PlayerGroup?       // selezione manuale (Top, SemiTop, ...)
+  rigorista   CertaintyLevel     @default(NONE) // NONE / PROBABLE / SURE
+  calciPiazzati CertaintyLevel   @default(NONE) // NONE / PROBABLE / SURE
+
+  // ✅ Possibile Spesa (formula dopo): la salviamo già come numero (modificabile)
+  possibleSpend Int?             // null finché non calcolata/assegnata
+
   teams       TeamPlayer[]
   stats       MatchdayStat[]
 
@@ -61,6 +87,11 @@ model Player {
   @@index([roleClassic])
   @@index([team])
   @@index([name])
+
+  // ✅ indici utili per filtri/ricerche nella tabella listone
+  @@index([group])
+  @@index([rigorista])
+  @@index([calciPiazzati])
 }
 
 model Team {
@@ -153,7 +184,6 @@ model FreeAgentNote {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  // ✅ opzionale ma consigliato: relazione a User (così puoi include/where più comodi)
   user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@unique([userId, playerKey])

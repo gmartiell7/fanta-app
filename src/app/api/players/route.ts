@@ -8,6 +8,12 @@ function toInt(v: string | null, def: number) {
     return Number.isFinite(n) && n > 0 ? Math.trunc(n) : def;
 }
 
+function toBool(v: string | null) {
+    if (!v) return false;
+    const s = v.trim().toLowerCase();
+    return s === "1" || s === "true" || s === "yes" || s === "y";
+}
+
 type Mode = "MANTRA" | "CLASSIC";
 
 function normalizeMode(v: string | null): Mode {
@@ -23,6 +29,8 @@ export async function GET(req: Request) {
     }
 
     const { searchParams } = new URL(req.url);
+
+    const all = toBool(searchParams.get("all"));
 
     const page = toInt(searchParams.get("page"), 1);
     const pageSizeRaw = toInt(searchParams.get("pageSize"), 20);
@@ -60,9 +68,40 @@ export async function GET(req: Request) {
         ];
     }
 
+    // ✅ modalità "all": per la pagina listone (senza paginazione)
+    if (all) {
+        const players = await prisma.player.findMany({
+            where,
+            orderBy: [{ name: "asc" }, { extId: "asc" }],
+            take: 5000, // safety
+            select: {
+                id: true,
+                extId: true,
+                name: true,
+                team: true,
+                roleMantra: true,
+                roleClassic: true,
+                price: true,
+
+                // ✅ nuovi campi listone avanzato
+                group: true,
+                rigorista: true,
+                calciPiazzati: true,
+                possibleSpend: true,
+            },
+        });
+
+        return NextResponse.json({
+            mode,
+            all: true,
+            total: players.length,
+            players,
+        });
+    }
+
+    // ✅ modalità paginata (come prima)
     const skip = (page - 1) * pageSize;
 
-    // ✅ count + page in parallelo
     const [total, players] = await Promise.all([
         prisma.player.count({ where }),
         prisma.player.findMany({
@@ -78,6 +117,12 @@ export async function GET(req: Request) {
                 roleMantra: true,
                 roleClassic: true,
                 price: true,
+
+                // ✅ nuovi campi (non danno fastidio alla pagina vecchia)
+                group: true,
+                rigorista: true,
+                calciPiazzati: true,
+                possibleSpend: true,
             },
         }),
     ]);
