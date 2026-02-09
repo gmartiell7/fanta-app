@@ -47,15 +47,20 @@ function roleStringForMode(p: PlayerFromDB, mode: GameMode) {
 
 function expandRoleToken(token: string): string[] {
     const t = token.trim();
-    const parts = t.split("/").map((x) => x.trim()).filter(Boolean);
+    const parts = t
+        .split("/")
+        .map((x) => x.trim())
+        .filter(Boolean);
 
     const out: string[] = [];
     for (const p of parts) {
-        if (p.toLowerCase() === "b") out.push("Dd", "Ds", "Dc");
+        // ✅ b è un ruolo specifico "B" (braccetto), NON un jolly Dd/Ds/Dc
+        if (p.toLowerCase() === "b") out.push("B");
         else out.push(normRole(p));
     }
     return [...new Set(out)].filter(Boolean);
 }
+
 
 type Row = {
     id: string;
@@ -488,7 +493,7 @@ export function getLineGroup(slot: string, mode: GameMode) {
     }
 
     if (has("Por")) return "GK";
-    if (has("Dd") || has("Ds") || has("Dc")) return "DEF";
+    if (has("Dd") || has("Ds") || has("Dc") || has("B")) return "DEF";
     if (has("W")) return "AM";
     if (has("E")) return "MID";
     if (has("M") || has("C")) return "MID";
