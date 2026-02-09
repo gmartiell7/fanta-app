@@ -61,7 +61,6 @@ function expandRoleToken(token: string): string[] {
     return [...new Set(out)].filter(Boolean);
 }
 
-
 type Row = {
     id: string;
     name: string;
@@ -264,7 +263,7 @@ export function computeTopFlopScoresByRole(players: PlayerFromDB[], mode: GameMo
 
 export type LineupItem = {
     slot: string;
-    slotIndex: number; // ✅ identifica lo “slot duplicato” (es: A/Pc #9 e A/Pc #10)
+    slotIndex: number;
     player: PlayerFromDB;
     usedRole: string;
     score: number;
@@ -274,19 +273,66 @@ export type PickBestLineupResult =
     | { selectable: true; lineup: LineupItem[] }
     | { selectable: false; lineup: LineupItem[] };
 
+// ✅ ranking offensivo: più alto = più offensivo
+function offensiveRank(role: string, mode: GameMode) {
+    const r = normRole(role);
+
+    if (mode === "CLASSIC") {
+        // P < D < C < A
+        if (r === "P") return 10;
+        if (r === "D") return 20;
+        if (r === "C") return 30;
+        if (r === "A") return 40;
+        return 0;
+    }
+
+    // MANTRA: Por < (B/Dc/Dd/Ds) < (E/M/C) < (W/T) < (Pc/A)
+    switch (r) {
+        case "Por":
+            return 10;
+        case "B":
+            return 18;
+        case "Dd":
+        case "Ds":
+            return 20;
+        case "Dc":
+            return 22;
+
+        case "E":
+            return 30;
+        case "M":
+            return 32;
+        case "C":
+            return 34;
+
+        case "W":
+            return 40;
+        case "T":
+            return 42;
+
+        case "Pc":
+            return 50;
+        case "A":
+            return 48;
+
+        default:
+            return 0;
+    }
+}
+
 function pickPreferredRole(compat: string[], mode: GameMode) {
     if (compat.length === 0) return "";
-    let usedRole = compat[0];
-    if (compat.length > 1 && mode === "MANTRA") {
-        const preferOrder = ["Pc", "A", "T", "W", "C", "M", "E", "Dc", "Dd", "Ds", "Por"];
-        for (const pref of preferOrder) {
-            if (compat.includes(pref)) {
-                usedRole = pref;
-                break;
-            }
+    // se più ruoli, scegli il più offensivo (coerente con richiesta)
+    let best = compat[0];
+    let bestRank = offensiveRank(best, mode);
+    for (const r of compat.slice(1)) {
+        const rk = offensiveRank(r, mode);
+        if (rk > bestRank) {
+            best = r;
+            bestRank = rk;
         }
     }
-    return usedRole;
+    return best;
 }
 
 function buildScoreResolver(
@@ -320,7 +366,7 @@ function buildScoreResolver(
         return allowed.filter((r) => roles.includes(r));
     }
 
-    return { playerRoles, getScoreMapForSlot, getCompatibleRoles };
+    return { getScoreMapForSlot, getCompatibleRoles };
 }
 
 export function pickBestLineup(
@@ -332,7 +378,6 @@ export function pickBestLineup(
 ): PickBestLineupResult {
     const { getScoreMapForSlot, getCompatibleRoles } = buildScoreResolver(players, scoreByRole, mode, extra);
 
-    // selezionabilità
     for (const slot of module.slots) {
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
@@ -347,7 +392,7 @@ export function pickBestLineup(
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
 
-        let best: { p: PlayerFromDB; usedRole: string; score: number } | null = null;
+        let best: { p: PlayerFromDB; usedRole: string; score: number; offRank: number } | null = null;
 
         for (const p of players) {
             if (used.has(p.id)) continue;
@@ -359,7 +404,16 @@ export function pickBestLineup(
             if (sc === undefined) continue;
 
             const usedRole = pickPreferredRole(compat, mode);
-            if (!best || sc > best.score) best = { p, usedRole, score: sc };
+            const offRank = offensiveRank(usedRole, mode);
+
+            if (
+                !best ||
+                sc > best.score ||
+                (sc === best.score && offRank > best.offRank) ||
+                (sc === best.score && offRank === best.offRank && p.name.localeCompare(best.p.name) < 0)
+            ) {
+                best = { p, usedRole, score: sc, offRank };
+            }
         }
 
         if (!best) return { selectable: false, lineup: [] };
@@ -371,10 +425,6 @@ export function pickBestLineup(
     return { selectable: true as const, lineup };
 }
 
-/**
- * WHAT-IF: forza un giocatore in uno specifico slotIndex del modulo,
- * poi completa gli altri slot con la stessa logica greedy.
- */
 export function pickBestLineupWhatIf(
     players: PlayerFromDB[],
     scoreByRole: Map<string, Map<string, number>>,
@@ -385,7 +435,6 @@ export function pickBestLineupWhatIf(
 ): PickBestLineupResult {
     const { getScoreMapForSlot, getCompatibleRoles } = buildScoreResolver(players, scoreByRole, mode, extra);
 
-    // selezionabilità: ogni slot deve avere candidati
     for (const slot of module.slots) {
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
@@ -400,7 +449,6 @@ export function pickBestLineupWhatIf(
         const allowedRoles = expandRoleToken(slot);
         const scoreMap = getScoreMapForSlot(allowedRoles);
 
-        // slot “bloccato”
         if (slotIndex === lock.slotIndex) {
             const forced = players.find((p) => p.id === lock.playerId);
             if (!forced) return { selectable: false, lineup: [] };
@@ -418,7 +466,7 @@ export function pickBestLineupWhatIf(
             continue;
         }
 
-        let best: { p: PlayerFromDB; usedRole: string; score: number } | null = null;
+        let best: { p: PlayerFromDB; usedRole: string; score: number; offRank: number } | null = null;
 
         for (const p of players) {
             if (used.has(p.id)) continue;
@@ -430,7 +478,16 @@ export function pickBestLineupWhatIf(
             if (sc === undefined) continue;
 
             const usedRole = pickPreferredRole(compat, mode);
-            if (!best || sc > best.score) best = { p, usedRole, score: sc };
+            const offRank = offensiveRank(usedRole, mode);
+
+            if (
+                !best ||
+                sc > best.score ||
+                (sc === best.score && offRank > best.offRank) ||
+                (sc === best.score && offRank === best.offRank && p.name.localeCompare(best.p.name) < 0)
+            ) {
+                best = { p, usedRole, score: sc, offRank };
+            }
         }
 
         if (!best) return { selectable: false, lineup: [] };
@@ -476,7 +533,19 @@ export function getSlotRanking(
         rows.push({ player: p, score: sc, matchedRoles: matched });
     }
 
-    rows.sort((a, b) => b.score - a.score || a.player.name.localeCompare(b.player.name));
+    rows.sort((a, b) => {
+        if (b.score !== a.score) return b.score - a.score;
+
+        // ✅ parità score: più offensivo prima
+        const aRole = pickPreferredRole(a.matchedRoles, mode);
+        const bRole = pickPreferredRole(b.matchedRoles, mode);
+        const ar = offensiveRank(aRole, mode);
+        const br = offensiveRank(bRole, mode);
+        if (br !== ar) return br - ar;
+
+        return a.player.name.localeCompare(b.player.name);
+    });
+
     return rows;
 }
 
