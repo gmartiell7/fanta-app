@@ -4,6 +4,9 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { calcFmvMeClient } from "@/lib/fantaConfig";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 type GameMode = "MANTRA" | "CLASSIC";
 
 type AuthedUser = { id: string; gameMode: GameMode };
@@ -20,9 +23,7 @@ async function getAuthedUser(): Promise<AuthedUser | null> {
     if (!user?.id) return null;
 
     const mode: GameMode =
-        String(user.gameMode ?? "MANTRA").toUpperCase() === "CLASSIC"
-            ? "CLASSIC"
-            : "MANTRA";
+        String(user.gameMode ?? "MANTRA").toUpperCase() === "CLASSIC" ? "CLASSIC" : "MANTRA";
 
     return { id: user.id, gameMode: mode };
 }
@@ -43,26 +44,17 @@ function splitMulti(s?: string | null) {
         .filter(Boolean);
 }
 
-type StatForFmv = {
-    vote: number | null;
-    gf: number | null;
-    gs: number | null;
-    rp: number | null;
-    rs: number | null;
-    rf: number | null;
-    au: number | null;
-    amm: number | null;
-    esp: number | null;
-    ass: number | null;
-};
-
 /**
  * Carica la rosa e calcola:
  * - pg: count MatchdayStat validi (vote != null e voteRaw != "6*")
  * - mv: media vote
  * - fmv: media formula (IDENTICA a MeClient)
+ *
+ * Inoltre: priceShown dipende dalla modalità utente
+ * - CLASSIC => priceClassic
+ * - MANTRA  => priceMantra
  */
-async function loadRosterWithComputed(teamId: string) {
+async function loadRosterWithComputed(teamId: string, gameMode: GameMode) {
     const roster = await prisma.teamPlayer.findMany({
         where: { teamId },
         orderBy: { createdAt: "asc" },
@@ -76,20 +68,34 @@ async function loadRosterWithComputed(teamId: string) {
                     team: true,
                     roleMantra: true,
                     roleClassic: true,
-                    price: true,
+
+                    // ✅ prezzi separati
+                    priceClassic: true,
+                    priceMantra: true,
                 },
             },
         },
     });
 
     const playerIds = roster.map((r) => r.player.id);
-    if (playerIds.length === 0) return roster;
+    if (playerIds.length === 0) {
+        return roster.map((r) => ({
+            ...r,
+            player: {
+                ...r.player,
+                priceShown: gameMode === "CLASSIC" ? r.player.priceClassic : r.player.priceMantra,
+                pg: 0,
+                mv: null,
+                fmv: null,
+            },
+        }));
+    }
 
     const stats = await prisma.matchdayStat.findMany({
         where: {
             playerId: { in: playerIds },
             vote: { not: null },
-            NOT: { voteRaw: "6*" }, // escludo i 6*
+            NOT: { voteRaw: "6*" },
         },
         select: {
             playerId: true,
@@ -125,7 +131,6 @@ async function loadRosterWithComputed(teamId: string) {
             ass: s.ass ?? 0,
         });
 
-        // calcFmvMeClient può teoricamente tornare null se vote è null, ma qui vote è sempre numero
         if (fmv == null) continue;
 
         const cur = agg.get(s.playerId) ?? { pg: 0, sumVote: 0, sumFmv: 0 };
@@ -141,10 +146,13 @@ async function loadRosterWithComputed(teamId: string) {
         const mv = pg > 0 ? a!.sumVote / pg : null;
         const fmv = pg > 0 ? a!.sumFmv / pg : null;
 
+        const priceShown = gameMode === "CLASSIC" ? r.player.priceClassic : r.player.priceMantra;
+
         return {
             ...r,
             player: {
                 ...r.player,
+                priceShown,
                 pg,
                 mv,
                 fmv,
@@ -155,21 +163,17 @@ async function loadRosterWithComputed(teamId: string) {
 
 export async function GET() {
     const user = await getAuthedUser();
-    if (!user) {
-        return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
-    }
+    if (!user) return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
 
     const team = await getOrCreateTeam(user.id);
-    const roster = await loadRosterWithComputed(team.id);
+    const roster = await loadRosterWithComputed(team.id, user.gameMode);
 
     return NextResponse.json({ team, roster, gameMode: user.gameMode });
 }
 
 export async function POST(req: Request) {
     const user = await getAuthedUser();
-    if (!user) {
-        return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
-    }
+    if (!user) return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
 
     const body = (await req.json().catch(() => null)) as { playerExtId?: number } | null;
     const playerExtId = Number(body?.playerExtId);
@@ -184,9 +188,7 @@ export async function POST(req: Request) {
         where: { extId: playerExtId },
         select: { extId: true, roleMantra: true, roleClassic: true },
     });
-    if (!player) {
-        return NextResponse.json({ error: "Giocatore non trovato" }, { status: 404 });
-    }
+    if (!player) return NextResponse.json({ error: "Giocatore non trovato" }, { status: 404 });
 
     const isGk =
         user.gameMode === "CLASSIC"
@@ -222,15 +224,13 @@ export async function POST(req: Request) {
         // già in rosa
     }
 
-    const roster = await loadRosterWithComputed(team.id);
+    const roster = await loadRosterWithComputed(team.id, user.gameMode);
     return NextResponse.json({ team, roster, gameMode: user.gameMode });
 }
 
 export async function DELETE(req: Request) {
     const user = await getAuthedUser();
-    if (!user) {
-        return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
-    }
+    if (!user) return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
 
     const body = (await req.json().catch(() => null)) as { playerExtId?: number } | null;
     const playerExtId = Number(body?.playerExtId);
@@ -245,6 +245,6 @@ export async function DELETE(req: Request) {
         where: { teamId: team.id, playerExtId },
     });
 
-    const roster = await loadRosterWithComputed(team.id);
+    const roster = await loadRosterWithComputed(team.id, user.gameMode);
     return NextResponse.json({ team, roster, gameMode: user.gameMode });
 }
