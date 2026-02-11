@@ -28,7 +28,7 @@ type PlayerRow = {
     team: string;
     roleMantra: string;
     roleClassic: string | null;
-    price: number; // ✅ per ora usiamo questo (valore salvato dal CSV)
+    price: number;
     group: PlayerGroup | null;
     rigorista: CertaintyLevel;
     calciPiazzati: CertaintyLevel;
@@ -104,12 +104,22 @@ function CertaintyIcon({
     );
 }
 
+/** ✅ Non usare mai res.json() "alla cieca" */
+async function safeJson(res: Response) {
+    const text = await res.text();
+    if (!text) return null;
+    try {
+        return JSON.parse(text);
+    } catch {
+        return null; // HTML / testo non JSON
+    }
+}
+
 export default function AdminListonePage() {
     const [file, setFile] = useState<File | null>(null);
     const [loadingUpload, setLoadingUpload] = useState(false);
     const [loadingReset, setLoadingReset] = useState(false);
 
-    // ✅ nuova parte
     const [loadingTable, setLoadingTable] = useState(false);
     const [savingExtId, setSavingExtId] = useState<number | null>(null);
     const [gameMode, setGameMode] = useState<GameMode>("MANTRA");
@@ -141,15 +151,20 @@ export default function AdminListonePage() {
                 fetch("/api/admin/players", { cache: "no-store" }),
             ]);
 
-            const gmData = await gmRes.json();
-            if (gmRes.ok && (gmData.gameMode === "MANTRA" || gmData.gameMode === "CLASSIC")) {
+            const gmData = await safeJson(gmRes);
+            if (
+                gmRes.ok &&
+                (gmData?.gameMode === "MANTRA" || gmData?.gameMode === "CLASSIC")
+            ) {
                 setGameMode(gmData.gameMode);
             }
 
-            const pData = await pRes.json();
-            if (!pRes.ok) throw new Error(pData?.error ?? "Impossibile caricare i giocatori");
+            const pData = await safeJson(pRes);
+            if (!pRes.ok) {
+                throw new Error(pData?.error || `Impossibile caricare i giocatori (${pRes.status})`);
+            }
 
-            setPlayers(Array.isArray(pData.players) ? pData.players : []);
+            setPlayers(Array.isArray(pData?.players) ? pData.players : []);
         } catch (e: any) {
             toast.error(e?.message ?? "Errore caricamento tabella");
         } finally {
@@ -175,17 +190,18 @@ export default function AdminListonePage() {
                 body: fd,
             });
 
-            const data = await res.json();
-            if (!res.ok) throw new Error(data?.error ?? "Upload fallito");
+            const data = await safeJson(res);
+            if (!res.ok) {
+                throw new Error(data?.error || `Upload fallito (${res.status})`);
+            }
 
             toast.success(
-                `OK: unique ${data.uniqueByExtId ?? "?"} · upserted ${data.upserted ?? "?"} · sep ${data.separator ?? "?"}`
+                `OK: unique ${data?.uniqueByExtId ?? "?"} · upserted ${data?.upserted ?? "?"} · sep ${data?.separator ?? "?"}`
             );
 
-            // ✅ dopo upload ricarico tabella
             await loadAll();
         } catch (e: any) {
-            toast.error(e.message ?? "Errore upload");
+            toast.error(e?.message ?? "Errore upload");
         } finally {
             setLoadingUpload(false);
         }
@@ -203,23 +219,27 @@ export default function AdminListonePage() {
                 method: "POST",
             });
 
-            const data = await res.json();
-            if (!res.ok) throw new Error(data?.error ?? "Reset fallito");
+            const data = await safeJson(res);
+            if (!res.ok) {
+                throw new Error(data?.error || `Reset fallito (${res.status})`);
+            }
 
             toast.success(
-                `Reset OK ✔️\nGiocatori: ${data.deleted?.players ?? 0}\nStats: ${data.deleted?.stats ?? 0}\nRose: ${data.deleted?.teamPlayers ?? 0}`
+                `Reset OK ✔️\nGiocatori: ${data?.deleted?.players ?? 0}\nStats: ${data?.deleted?.stats ?? 0}\nRose: ${data?.deleted?.teamPlayers ?? 0}`
             );
 
-            // ✅ dopo reset svuoto tabella
             setPlayers([]);
         } catch (e: any) {
-            toast.error(e.message ?? "Errore reset");
+            toast.error(e?.message ?? "Errore reset");
         } finally {
             setLoadingReset(false);
         }
     }
 
-    async function patchPlayerMeta(extId: number, patch: Partial<Pick<PlayerRow, "group" | "rigorista" | "calciPiazzati" | "possibleSpend">>) {
+    async function patchPlayerMeta(
+        extId: number,
+        patch: Partial<Pick<PlayerRow, "group" | "rigorista" | "calciPiazzati" | "possibleSpend">>
+    ) {
         setSavingExtId(extId);
         try {
             const res = await fetch("/api/admin/players/meta", {
@@ -227,10 +247,12 @@ export default function AdminListonePage() {
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ extId, ...patch }),
             });
-            const data = await res.json();
-            if (!res.ok) throw new Error(data?.error ?? "Salvataggio fallito");
 
-            // ✅ aggiorno in locale
+            const data = await safeJson(res);
+            if (!res.ok) {
+                throw new Error(data?.error || `Salvataggio fallito (${res.status})`);
+            }
+
             setPlayers((prev) =>
                 prev.map((p) => (p.extId === extId ? { ...p, ...patch } : p))
             );
@@ -352,24 +374,17 @@ export default function AdminListonePage() {
                                     {filtered.map((p) => {
                                         const role =
                                             gameMode === "CLASSIC"
-                                                ? (p.roleClassic ?? "-")
-                                                : (p.roleMantra ?? "-");
+                                                ? p.roleClassic ?? "-"
+                                                : p.roleMantra ?? "-";
 
                                         const saving = savingExtId === p.extId;
 
                                         return (
                                             <tr key={p.id} className="border-t">
-                                                <td className="p-3 whitespace-nowrap font-medium">
-                                                    {role}
-                                                </td>
-
+                                                <td className="p-3 whitespace-nowrap font-medium">{role}</td>
                                                 <td className="p-3 whitespace-nowrap">{p.name}</td>
-
                                                 <td className="p-3 whitespace-nowrap">{p.team}</td>
-
-                                                <td className="p-3 whitespace-nowrap">
-                                                    {p.price ?? 0}
-                                                </td>
+                                                <td className="p-3 whitespace-nowrap">{p.price ?? 0}</td>
 
                                                 <td className="p-3 whitespace-nowrap">
                                                     <select
