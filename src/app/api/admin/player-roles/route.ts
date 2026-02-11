@@ -41,7 +41,10 @@ export async function GET(req: NextRequest) {
                     team: true,
                     roleMantra: true,
                     roleClassic: true,
-                    price: true,
+
+                    // ✅ prezzi separati
+                    priceClassic: true,
+                    priceMantra: true,
 
                     // ✅ campi listone avanzato
                     group: true,
