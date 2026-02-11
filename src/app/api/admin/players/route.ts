@@ -13,12 +13,11 @@ export async function GET(req: NextRequest) {
         const role = url.searchParams.get("role")?.trim() || null;
         const q = url.searchParams.get("q")?.trim() || null;
 
-        // ✅ where tipizzato correttamente
         const where: Prisma.PlayerWhereInput = {};
 
         if (team) where.team = team;
 
-        // Qui "role" dalla query lo mappiamo sul campo vero del DB: roleMantra
+        // role query => roleMantra
         if (role) where.roleMantra = role;
 
         if (q) {
@@ -26,6 +25,7 @@ export async function GET(req: NextRequest) {
                 { name: { contains: q, mode: "insensitive" } },
                 { team: { contains: q, mode: "insensitive" } },
                 { roleMantra: { contains: q, mode: "insensitive" } },
+                { roleClassic: { contains: q, mode: "insensitive" } },
             ];
         }
 
@@ -36,9 +36,21 @@ export async function GET(req: NextRequest) {
                 orderBy: [{ team: "asc" }, { roleMantra: "asc" }, { name: "asc" }],
                 select: {
                     id: true,
+                    extId: true,
                     name: true,
                     team: true,
                     roleMantra: true,
+                    roleClassic: true,
+
+                    // ✅ prezzi separati (Classic = Qt.A, Mantra = Qt.A M)
+                    priceClassic: true,
+                    priceMantra: true,
+
+                    // ✅ meta listone
+                    group: true,
+                    rigorista: true,
+                    calciPiazzati: true,
+                    possibleSpend: true,
                 },
             }),
         ]);

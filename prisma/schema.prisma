@@ -67,7 +67,8 @@ model Player {
   roleClassic String?
 
   team        String
-  price       Int    @default(0)
+  priceMantra  Int @default(0)
+priceClassic Int @default(0)
 
   // ✅ Nuovi campi per "listone avanzato"
   group       PlayerGroup?       // selezione manuale (Top, SemiTop, ...)

@@ -28,7 +28,8 @@ type PlayerRow = {
     team: string;
     roleMantra: string;
     roleClassic: string | null;
-    price: number;
+    priceClassic: number;
+    priceMantra: number;
     group: PlayerGroup | null;
     rigorista: CertaintyLevel;
     calciPiazzati: CertaintyLevel;
@@ -384,7 +385,9 @@ export default function AdminListonePage() {
                                                 <td className="p-3 whitespace-nowrap font-medium">{role}</td>
                                                 <td className="p-3 whitespace-nowrap">{p.name}</td>
                                                 <td className="p-3 whitespace-nowrap">{p.team}</td>
-                                                <td className="p-3 whitespace-nowrap">{p.price ?? 0}</td>
+                                                <td className="p-3 whitespace-nowrap">
+                                                    {gameMode === "CLASSIC" ? (p.priceClassic ?? 0) : (p.priceMantra ?? 0)}
+                                                </td>
 
                                                 <td className="p-3 whitespace-nowrap">
                                                     <select

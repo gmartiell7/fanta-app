@@ -2,6 +2,11 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
+import { isAdminEmail } from "@/lib/admin";
+import { Prisma } from "@prisma/client";
+
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 type PlayerGroup =
     | "TOP"
@@ -49,11 +54,25 @@ function isGroup(v: string): v is PlayerGroup {
     );
 }
 
+async function isAdminFromSessionEmail(email: string) {
+    const e = email.toLowerCase();
+    const dbUser = await prisma.user.findUnique({
+        where: { email: e },
+        select: { role: true },
+    });
+    return dbUser?.role === "ADMIN" || isAdminEmail(e);
+}
+
 // PATCH /api/admin/players/meta
 // body: { extId: number, group?: PlayerGroup|null, rigorista?: CertaintyLevel, calciPiazzati?: CertaintyLevel, possibleSpend?: number|null }
 export async function PATCH(req: Request) {
     const session = await getServerSession(authOptions);
-    if (!session?.user?.email) return jsonErr("Non autorizzato", 401);
+    const email = session?.user?.email?.toLowerCase() ?? null;
+    if (!email) return jsonErr("Non autorizzato", 401);
+
+    // ✅ admin guard
+    const okAdmin = await isAdminFromSessionEmail(email);
+    if (!okAdmin) return jsonErr("Non autorizzato", 403);
 
     let body: any;
     try {
@@ -62,15 +81,14 @@ export async function PATCH(req: Request) {
         return jsonErr("Body JSON non valido", 400);
     }
 
-    const extIdRaw = body?.extId;
-    const extId = Number(extIdRaw);
+    const extId = Number(body?.extId);
     if (!Number.isFinite(extId) || extId <= 0) {
         return jsonErr("extId non valido", 400);
     }
 
-    // accettiamo patch parziali
     const patch: Record<string, any> = {};
 
+    // group: null | "" => null, oppure valore enum
     if ("group" in body) {
         const g = body.group;
         if (g === null || g === "") {
@@ -82,25 +100,29 @@ export async function PATCH(req: Request) {
         }
     }
 
+    // rigorista: enum
     if ("rigorista" in body) {
         const s = norm(body.rigorista);
         if (!isCertainty(s)) return jsonErr("rigorista non valido", 400);
         patch.rigorista = s;
     }
 
+    // calciPiazzati: enum
     if ("calciPiazzati" in body) {
         const s = norm(body.calciPiazzati);
         if (!isCertainty(s)) return jsonErr("calciPiazzati non valido", 400);
         patch.calciPiazzati = s;
     }
 
+    // possibleSpend: null | "" => null, oppure numero >= 0
     if ("possibleSpend" in body) {
-        const n = toIntOrNull(body.possibleSpend);
-        // accettiamo null o numero >= 0
-        if (n === null) {
+        const raw = body.possibleSpend;
+
+        if (raw === null || raw === "") {
             patch.possibleSpend = null;
         } else {
-            if (n < 0) return jsonErr("possibleSpend non valido", 400);
+            const n = toIntOrNull(raw);
+            if (n === null || n < 0) return jsonErr("possibleSpend non valido", 400);
             patch.possibleSpend = n;
         }
     }
@@ -124,11 +146,11 @@ export async function PATCH(req: Request) {
 
         return jsonOk({ player: updated });
     } catch (e: any) {
-        // prisma throws if not found
-        const msg = String(e?.message ?? "");
-        if (msg.toLowerCase().includes("record") && msg.toLowerCase().includes("not found")) {
+        // record not found
+        if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2025") {
             return jsonErr("Giocatore non trovato", 404);
         }
-        return jsonErr("Errore aggiornamento", 500, { details: msg });
+        console.error("PATCH META ERROR:", e);
+        return jsonErr("Errore aggiornamento", 500, { details: String(e?.message ?? "") });
     }
 }

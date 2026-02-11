@@ -34,6 +34,7 @@ function toIntOrNull(v: unknown) {
 }
 
 function normalizeKey(k: string) {
+    // normalizza anche i punti (Qt.A) e spazi multipli
     return norm(k).toLowerCase();
 }
 
@@ -69,7 +70,8 @@ function splitBySep(line: string, sep: string) {
 }
 
 function findHeader(lines: string[]) {
-    const required = ["id", "rm", "nome", "squadra", "fvm"];
+    // ✅ richieste per prezzi: Qt.A (classic) + Qt.A M (mantra)
+    const required = ["id", "rm", "nome", "squadra", "qt.a", "qt.a m"];
 
     for (let i = 0; i < lines.length; i++) {
         const raw = lines[i].trim();
@@ -94,10 +96,7 @@ function sessionIsAdmin(session: any) {
     const email = (session?.user?.email as string | undefined)?.toLowerCase();
     const role = String(session?.user?.role ?? "");
     const flag = Boolean(session?.user?.isAdmin);
-
-    // ✅ isAdminEmail safe: se email è undefined → false
     const allow = email ? isAdminEmail(email) : false;
-
     return flag || role === "ADMIN" || allow;
 }
 
@@ -105,15 +104,17 @@ type ParsedPlayer = {
     extId: number;
     name: string;
     team: string;
-    price: number;
     roleMantra: string;
     roleClassic?: string;
+
+    // ✅ nuovi prezzi separati
+    priceClassic: number;
+    priceMantra: number;
 };
 
 export async function POST(req: Request) {
     try {
         const session = await getServerSession(authOptions);
-
         if (!session || !sessionIsAdmin(session)) {
             return jsonErr("Non autorizzato", 403, { email: session?.user?.email ?? null });
         }
@@ -126,30 +127,21 @@ export async function POST(req: Request) {
         }
 
         const file = formData.get("file");
-        if (!(file instanceof File)) {
-            return jsonErr("File mancante o non valido", 400);
-        }
+        if (!(file instanceof File)) return jsonErr("File mancante o non valido", 400);
 
-        // ⚠️ Nota Vercel: spesso il limite reale della request è più basso (puoi beccare 413 / body tronco).
         const MAX_MB = 15;
         if (file.size > MAX_MB * 1024 * 1024) {
             return jsonErr(`File troppo grande (max ${MAX_MB}MB)`, 413);
         }
 
-        let buffer: Buffer;
-        try {
-            buffer = Buffer.from(await file.arrayBuffer());
-        } catch {
-            return jsonErr("Impossibile leggere il file", 400);
-        }
-
+        const buffer = Buffer.from(await file.arrayBuffer());
         const text = buffer.toString("utf-8");
         const lines = text.split(/\r?\n/).map((l) => l.replace(/\r/g, ""));
 
         const headerInfo = findHeader(lines);
         if (!headerInfo) {
             return jsonErr(
-                "Header non trovato (attesi: Id, RM, Nome, Squadra, FVM) separati da TAB o ';'.",
+                "Header non trovato (attesi: Id, RM, Nome, Squadra, Qt.A, Qt.A M) separati da TAB o ';'.",
                 400
             );
         }
@@ -158,15 +150,18 @@ export async function POST(req: Request) {
         const headerNorm = headerCols.map(normalizeKey);
         const idx = (name: string) => headerNorm.indexOf(normalizeKey(name));
 
-        // ✅ usa nomi normalizzati (Id/RM/Nome...)
         const iId = idx("id");
         const iRM = idx("rm");
         const iNome = idx("nome");
         const iSquadra = idx("squadra");
-        const iFvm = idx("fvm");
+
+        // ✅ prezzi
+        const iQtA = idx("qt.a");     // classic
+        const iQtAM = idx("qt.a m");  // mantra
+
         const iR = idx("r"); // opzionale
 
-        if ([iId, iRM, iNome, iSquadra, iFvm].some((x) => x < 0)) {
+        if ([iId, iRM, iNome, iSquadra, iQtA, iQtAM].some((x) => x < 0)) {
             return jsonErr("Header trovato ma colonne richieste mancanti.", 400, {
                 headerCols,
                 sep: sep === "\t" ? "TAB" : ";",
@@ -187,7 +182,9 @@ export async function POST(req: Request) {
             const roleMantra = norm(parts[iRM]);
             const name = norm(parts[iNome]);
             const team = norm(parts[iSquadra]);
-            const price = toIntOrNull(parts[iFvm]);
+
+            const priceClassic = toIntOrNull(parts[iQtA]) ?? 0;
+            const priceMantra = toIntOrNull(parts[iQtAM]) ?? 0;
 
             const roleClassic = iR >= 0 ? norm(parts[iR]).toUpperCase() : "";
 
@@ -200,9 +197,10 @@ export async function POST(req: Request) {
                 extId,
                 name,
                 team,
-                price: price ?? 0,
                 roleMantra,
                 ...(roleClassic ? { roleClassic } : {}),
+                priceClassic,
+                priceMantra,
             });
         }
 
@@ -218,6 +216,7 @@ export async function POST(req: Request) {
         for (const r of parsed) map.set(r.extId, r);
         const unique = Array.from(map.values());
 
+        // split create vs update
         const CHUNK = 800;
 
         const existingExtIds = new Set<number>();
@@ -242,15 +241,17 @@ export async function POST(req: Request) {
                     extId: p.extId,
                     name: p.name,
                     team: p.team,
-                    price: p.price,
                     roleMantra: p.roleMantra,
                     roleClassic: p.roleClassic ?? null,
+
+                    // ✅ prezzi
+                    priceClassic: p.priceClassic,
+                    priceMantra: p.priceMantra,
                 })),
                 skipDuplicates: true,
             });
         }
 
-        // ⚠️ contatore "updated" più stabile (no race)
         let updated = 0;
         for (let i = 0; i < toUpdate.length; i += 300) {
             const chunk = toUpdate.slice(i, i + 300);
@@ -262,9 +263,12 @@ export async function POST(req: Request) {
                         data: {
                             name: p.name,
                             team: p.team,
-                            price: p.price,
                             roleMantra: p.roleMantra,
                             roleClassic: p.roleClassic ?? null,
+
+                            // ✅ prezzi
+                            priceClassic: p.priceClassic,
+                            priceMantra: p.priceMantra,
                         },
                     });
                 })
@@ -281,10 +285,10 @@ export async function POST(req: Request) {
             uniqueByExtId: unique.length,
             inserted: toCreate.length,
             updated,
+            prices: { classicCol: "Qt.A", mantraCol: "Qt.A M" },
         });
     } catch (e: any) {
         console.error("UPLOAD LISTONE FATAL:", e);
-        // ✅ qui “salvi” il frontend: ritorna SEMPRE JSON anche su crash
         return jsonErr(e?.message ?? "Errore interno", 500);
     }
 }
