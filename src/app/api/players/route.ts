@@ -3,6 +3,9 @@ import { prisma } from "@/lib/prisma";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
 function toInt(v: string | null, def: number) {
     const n = Number(v);
     return Number.isFinite(n) && n > 0 ? Math.trunc(n) : def;
@@ -22,7 +25,6 @@ function normalizeMode(v: string | null): Mode {
 }
 
 export async function GET(req: Request) {
-    // opzionale: se vuoi bloccare il mercato ai loggati
     const session = await getServerSession(authOptions);
     if (!session?.user?.email) {
         return NextResponse.json({ error: "Non autorizzato" }, { status: 401 });
@@ -40,8 +42,6 @@ export async function GET(req: Request) {
     const role = (searchParams.get("role") ?? "").trim();
     const q = (searchParams.get("q") ?? "").trim();
 
-    // ✅ where dinamico
-    // role: su roleMantra o roleClassic in base alla modalità
     const where: {
         roleMantra?: { contains: string; mode: "insensitive" };
         roleClassic?: { equals: string; mode: "insensitive" };
@@ -53,10 +53,8 @@ export async function GET(req: Request) {
 
     if (role) {
         if (mode === "CLASSIC") {
-            // Classic: match esatto ("P","D","C","A")
             where.roleClassic = { equals: role, mode: "insensitive" };
         } else {
-            // Mantra: match “Por” dentro "Por/Dc" ecc.
             where.roleMantra = { contains: role, mode: "insensitive" };
         }
     }
@@ -68,12 +66,12 @@ export async function GET(req: Request) {
         ];
     }
 
-    // ✅ modalità "all": per la pagina listone (senza paginazione)
+    // ✅ modalità "all": lista grande (no paginazione)
     if (all) {
         const players = await prisma.player.findMany({
             where,
             orderBy: [{ name: "asc" }, { extId: "asc" }],
-            take: 5000, // safety
+            take: 5000,
             select: {
                 id: true,
                 extId: true,
@@ -81,9 +79,12 @@ export async function GET(req: Request) {
                 team: true,
                 roleMantra: true,
                 roleClassic: true,
-                price: true,
 
-                // ✅ nuovi campi listone avanzato
+                // ✅ prezzi separati
+                priceClassic: true,
+                priceMantra: true,
+
+                // ✅ campi listone avanzato
                 group: true,
                 rigorista: true,
                 calciPiazzati: true,
@@ -99,7 +100,6 @@ export async function GET(req: Request) {
         });
     }
 
-    // ✅ modalità paginata (come prima)
     const skip = (page - 1) * pageSize;
 
     const [total, players] = await Promise.all([
@@ -116,9 +116,12 @@ export async function GET(req: Request) {
                 team: true,
                 roleMantra: true,
                 roleClassic: true,
-                price: true,
 
-                // ✅ nuovi campi (non danno fastidio alla pagina vecchia)
+                // ✅ prezzi separati
+                priceClassic: true,
+                priceMantra: true,
+
+                // ✅ campi listone avanzato
                 group: true,
                 rigorista: true,
                 calciPiazzati: true,
