@@ -4,11 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "set NEXT_DISABLE_TURBOPACK=1 && next dev",
-    "build": "prisma migrate deploy && next build",
+    "build": "prisma migrate deploy && prisma generate && next build",
     "start": "next start",
     "lint": "eslint",
     "postinstall": "prisma generate",
-    "vercel-build": "prisma generate && prisma migrate deploy && next build"
+    "vercel-build": "prisma migrate deploy && prisma generate && next build"
   },
   "dependencies": {
     "@prisma/client": "^6.19.2",
